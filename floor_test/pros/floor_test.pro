@@ -74,8 +74,10 @@ if n_elements(sptype) eq 0 then sptype_choice = 'default' $
 overlaps_data = mrdfits('/home/stgilhool/APGBS/spectra/overlaps/apgbs_overlaps_data.fits',1)
 logwl_grid = mrdfits('/home/stgilhool/APGBS/spectra/overlaps/apgbs_overlaps_data.fits',0)
 ; Relevant CKS vectors
-cks_teff = overlaps_data.teff_cks
-cks_vsini = overlaps_data.vsini_cks
+;cks_teff = overlaps_data.teff_cks
+;cks_vsini = overlaps_data.vsini_cks
+teff_ol_apg = overlaps_data.teff_apg
+vsini_ol_cks = overlaps_data.vsini_cks
 
 ;;; Loop through temperature bins and print cks vsini range, and
 ;;; number of spectra
@@ -91,12 +93,74 @@ cks_vsini = overlaps_data.vsini_cks
 t0 = 6000
 t1 = 6170
 
-sel_idx_ol = where(cks_teff ge t0 and cks_teff lt t1 and cks_vsini le 25, nsel_ol)
+sel_idx_ol = where(teff_ol_apg ge t0 and teff_ol_apg lt t1 and vsini_ol_cks le 25, $
+                   nsel_ol)
 
 odata = overlaps_data[sel_idx_ol]
-teff_ol = odata.teff_cks
+teff_ol = odata.teff_apg
 vsini_ol = odata.vsini_cks
 spectra_ol = odata.spec
+
+;;; Other data
+;as = mrdfits('/home/stgilhool/APOGEE/APOGEE_data/allStar-l31c.2.fits',1)
+; Read in APOGEE data cube
+alldata_file = '/home/stgilhool/APGBS/spectra/apgbs_datacube.fits'
+ad_full = mrdfits(alldata_file, 1)
+
+; conditional statements defining temperature range 
+c0 = 'allstar.teff_apg ge '+strtrim(t0,2)
+c1 = 'allstar.teff_apg lt '+strtrim(t1,2)
+
+nboot = n_bootstrap(c0, c1, allstar=ad_full, ret_idx=ri)
+
+boot_astar_idx = ad_full[ri].allstar_idx
+ol_astar_idx = odata.apg_idx
+
+final_astar_idx = cgsetintersection(boot_astar_idx, ol_astar_idx, indices_a=bastar_idx, indices_b=oastar_idx)
+
+
+; OKAY, you need to check the SNR cut? you made in making the data
+; cube.  I think there are three stars in the OVERLAP set that aren't
+; in the datacube.  The one I checked had SNR ~ 80 and no bad flags
+; that I could see.  The others could possibly have bad flags, I can't
+; remember if I checked that or not.
+
+; Further pare down the overlap sample
+odata = odata[oastar_idx]
+teff_ol = teff_ol[oastar_idx]
+vsini_ol = vsini_ol[oastar_idx]
+spectra_ol = odata.spec
+
+; Now, eliminate the overlaps from the bootstrap sample
+final_datacube_idx = cgsetdifference(boot_astar_idx, final_astar_idx, positions=new_boot_idx)
+
+boot_data = ad_full[ri[new_boot_idx]]
+
+; test if that worked
+help, ad_full[ri]
+help, boot_data
+if n_elements(ad_full[ri])-n_elements(boot_data) eq 48 then print, "N_ELEMENTS reduced by 48, as expected" else print, "Uh oh, overlap overlaps suspect!"
+elim_test = cgsetintersection(boot_data.allstar_idx, final_astar_idx, success=elim_check)
+if elim_check then print, "Uh oh, there are still overlaps!" else print, "Okay: no stars in the overlap sample present in the boot sample :)"
+
+; Yay!
+
+
+; sel_idx = where(ad_full.teff ge t0 and ad_full.teff lt t1, nsel)
+
+; ad = ad_full[sel_idx]
+
+; spectra = ad.spec
+
+; ; Smooth all
+
+;smooth_spec = ml_savgol_spectra(logwl_grid, spectra, width=5)
+
+
+;apg_sdata = as[ad.allstar_idx]
+
+
+
 
 ; Partition
 param_arr = [vsini_ol]
