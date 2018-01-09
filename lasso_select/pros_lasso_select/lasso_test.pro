@@ -63,23 +63,9 @@
 ;;;;;;;;;;;;;;;;;;;;
 ; Function that models Vsini, given design matrix and measured y-values
 
-function lasso_model, params, design_matrix=design_matrix, lasso_opt=lasso_opt
+function lasso_model, params, design_matrix=design_matrix
 
-if lasso_opt then begin
-    ; Now add the row requiring that the sum of the abs values of params =
-    ; lambda
-    sign_flip_vec = ((params ge 0) * 2) - 1 ;Should be 1 if positive, -1 if negative
-    ; need to zero the first element, since I don't want to include the
-    ; constant offset in the lasso
-    sign_flip_vec[0] = 0
-    
-    constraint_row = params * sign_flip_vec
-    
-    new_design_matrix = [[design_matrix],[constraint_row]]
-
-    model = new_design_matrix ## params
-
-endif else model = design_matrix ## params
+model = design_matrix ## params
 
 model = reform(model)
 
@@ -92,10 +78,12 @@ end
 ;;;;;;;;;;;;;;;;;;;;
 ; Function called by mpfit to optimize the model parameters
 
-function lasso_regress, params, design_matrix=design_matrix, yvals=yvals, err=err, vis=vis, lasso_opt=lasso_opt
+function lasso_regress, params
 
+common lasso, design_matrix, yvals, err, vis, lasso_opt, lambda
+  
 ; Make the model, given the parameters, x and y data
-model = lasso_model(params, design_matrix=design_matrix, lasso_opt=lasso_opt)
+model = lasso_model(params, design_matrix=design_matrix)
 
 data = yvals
 
@@ -105,44 +93,31 @@ res = data - model
 ; Calculate deviation
 dev = res/err
 
-;chi2 = sqrt(total(dev^2, /double))
+chi2 = sqrt(total(dev^2, /double))
 
+rmse = sqrt(mean(res^2))
 
 if lasso_opt then begin
 
-    ; Check if lasso constraint is satisfied
-    param_tot = total(abs(params[1:*]))
-    lasso_lambda = data[-1]
-    
-    if param_tot gt lasso_lambda then begin
-        lasso_message = "lasso FAIL! lambda = "+strtrim(lasso_lambda,2)+" | sum of params = "+strtrim(param_tot,2)
-    endif else lasso_message = "lasso COOOOOL! lambda = "+strtrim(lasso_lambda,2)+" | sum of params = "+strtrim(param_tot,2)
-    ; Calculate RMS of just Vsini residuals
-    rmse = sqrt(mean(res[0:-2]^2))
+    ; Add the penalty
+    abs_params = total(abs(params[1:*])) ; not including the constant term
+    lasso_penalty = lambda * abs_params
 
-endif else begin
-    
-    lasso_message = "LASSO is off"
-    rmse = sqrt(mean(res^2))
+    chi2 = chi2 + lasso_penalty
 
-endelse
+    ; Make string for plot
+    lasso_message = "LASSO is on. Lambda = "+strtrim(lambda,2)+" | abs_params = "+strtrim(abs_params,2)
+
+endif else lasso_message = "LASSO is off"
     
 if vis eq 1 then begin
 
-    if lasso_opt then begin
-
-        ; Disregard the lasso constraint in the plotting
-        sorti = sort(data[0:-2])
-
-    endif else sorti = sort(data)
-
-
     ; Sort the data by Vsini for visualization
+    sorti = sort(data)
     sortd = data[sorti]
     sortm = model[sorti]
     sortr = res[sorti]
 
-        
     plot, sortd, ps = 8, xtitle = "File number", ytitle = "Vsini", title = lasso_message, /xs
     oplot, sortm, ps = 8, color = !red
     plot, sortr, ps = 8, title = "Residuals with RMSE: "+strtrim(rmse,2), /xs
@@ -150,14 +125,16 @@ if vis eq 1 then begin
 
 endif
 
-return, dev
+return, chi2
 
 end
 
 ;;;;;;;;;;;;;;;;;;;;
 
 
-pro lasso_test, lambda, LASSO=lasso
+pro lasso_test, LASSO=lasso
+
+common lasso, design_matrix, yvals, err, vis, lasso_opt, lambda
 
 lasso_opt = keyword_set(lasso)
 
@@ -288,9 +265,6 @@ nfeatures = n_elements(data[*,0])
  
 rdeg = 1 ; just linear regression
 
-; first guess lambda
-if n_params() eq 0 then lambda = 10
-
 ; result_sample = {nfeatures:nfeatures, $
 ;                  lambda:lambda, $
 ;                  regression_degree:rdeg, $
@@ -311,15 +285,15 @@ nspec = n_elements(odata)
 
 if nfeatures gt nspec then message, "Still too many features"
 
-data_matrix = [reform(replicate(1d0,nspec),1,nspec),data]
+design_matrix = [reform(replicate(1d0,nspec),1,nspec),data]
 
 ; Get rid of NaNs
-nan_idx = where(finite(data_matrix) eq 0, nancnt)
+nan_idx = where(finite(design_matrix) eq 0, nancnt)
 if nancnt gt 0 then begin
     print, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     print, "WARNING: NaNs exist in data matrix. Replacing with zeroes and stopping execution for user review"
     print, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    data_matrix[nan_idx] = 0d0
+    design_matrix[nan_idx] = 0d0
     stop
 endif
     
@@ -344,75 +318,76 @@ refit_iteration = 0
 refit:
 
 ; so let's just add lambda as the last entry in the yvals vector
-yvals_vsini = vsini_ol
-
-if lasso_opt then yvals = [yvals_vsini, lambda] $
-  else yvals = yvals_vsini
+yvals = vsini_ol
 
 ; error
-err_data = replicate(1d0, nspec) ;1 km/s error on cks vsini
-
- ;make constraint row have tiny error
-if lasso_opt then err = [err_data, 1d-8] $
-  else err = err_data
+err = replicate(1d0, nspec) ;1 km/s error on cks vsini
 
 ; watch output
 vis = 1
 
-functargs = {design_matrix:data_matrix, $
-             yvals:yvals, $
-             err:err, $
-             lasso_opt:lasso_opt, $
-             vis:vis $
-            }
+rcoeff = regress(design_matrix[1:*,*], yvals, const=rconst, /double)
 
-nparams = n_elements(data_matrix[*,0])     
-parinfo = replicate({value:0.0d0, step:1d-5, relstep:0, limited:[0,0], limits:[0d0,0d0]},nparams)
-parinfo[0].value=17.19
-parinfo[0].step = 0.1
+rcoeff = reform(rcoeff)
+
+; Define p0 (guess) and scale for amoeba
+nparams = n_elements(design_matrix[*,0])     
+
+guess = [rconst,rcoeff]
+
+scale = 0.5 * guess
+
+ftol = 1d-1
+nmax = 200
 
 ; If we're on the 2nd (lasso) iteration, use the ordinary regression
 ; coefficients as guesses
 if refit_iteration then begin 
-    parinfo.value = r 
-    parinfo[1:*].step = 0
-    parinfo[1:*].relstep = 0.01
-    parinfo[1:*].limited[0] = 1
-    parinfo[1:*].limited[1] = 1
-    parinfo[1:*].limits[0] = ((r[1:*] - (2*abs(r[1:*]))) < 0d0)
-    parinfo[1:*].limits[1] = ((r[1:*] + (2*abs(r[1:*]))) > 0d0)
+
+    guess = r
+    scale = 3d0*r
+
+    ftol = 1d-3
+    nmax = 2000
     
     window, 2
+
 endif else window, 0
 
 !p.multi = [0,1,2]
 
-r = mpfit('lasso_regress', parinfo=parinfo, functargs=functargs, status=status, dof=dof, bestnorm=chi2, errmsg=errmsg, /quiet)
+r = amoeba3(ftol, function_name='lasso_regress', function_value=fval, $
+            ncalls=ncalls, nmax=nmax, p0=guess, scale=scale)
+
 
 
 !p.multi = 0
 
-
-if status gt 0 then begin
+if n_elements(r) eq n_elements(guess) then begin
 
     ; Get the model
-    model = lasso_model(r, design_matrix=data_matrix, lasso_opt=lasso_opt)
+    model = lasso_model(r, design_matrix=design_matrix)
     ; in order to get the residuals
-    if lasso_opt then residuals = yvals[0:-2] - model[0:-2] $
-      else residuals = yvals - model
+    residuals = yvals - model
     ; in order to get RMSE
     rmse = sqrt(mean(residuals^2))
 
+    ; Take chi2 from result
+    chi2 = fval[0]
+
+    abs_params = total(abs(r[1:*]))
+
     if lasso_opt then begin
-        ; Also, check if lasso constraint is satisfied
-        param_tot = total(abs(r[1:*]))
+        ; Check how lasso went
         
-        if param_tot gt lambda then begin
-            lasso_message = "LASSO constraint violated by "+ $
-              strtrim(param_tot-lambda,2)+" for lambda = "+strtrim(lambda,2)
-        endif else lasso_message = "LASSO constraint satisfied for lambda = "+ $
-          strtrim(lambda,2)
-    endif else lasso_message = "LASSO not used"
+        
+        lambda_penalty = abs_params * lambda
+
+        lasso_message = "LASSO: Lambda = "+strtrim(lambda,2)+ $
+          " | abs_params = "+strtrim(abs_params,2)+" | pen = "+ $
+          strtrim(lambda_penalty,2)+" | chi2 = "+strtrim(chi2,2)
+        
+    endif else lasso_message = "LASSO not used: chi2 = "+strtrim(chi2,2)
         
         ; Plot the result
     window, refit_iteration*2+1
@@ -422,15 +397,15 @@ if status gt 0 then begin
 
     refit_iteration++
     lasso_opt = 1
-    lambda = 0.98 * total(abs(r[1:*]))
+    lambda = (chi2/abs_params) * 0.5
 
     
     if refit_iteration eq 1 then goto, refit
 
 endif else begin
     
-    print, "MPFIT failed with status = "+strtrim(status,2)
-    print, errmsg
+    print, "AMOEBA failed"
+    print, "Result: ", r
 
 endelse
 
