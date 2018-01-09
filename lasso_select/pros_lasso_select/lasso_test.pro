@@ -340,6 +340,8 @@ data = 0
 ; suppose I could have the design matrix change from iteration to
 ; iteration. Or I could bias the data and require params to be
 ; positive? Not sure if/how that would work... Let's try the first way
+refit_iteration = 0
+refit:
 
 ; so let's just add lambda as the last entry in the yvals vector
 yvals_vsini = vsini_ol
@@ -349,7 +351,10 @@ if lasso_opt then yvals = [yvals_vsini, lambda] $
 
 ; error
 err_data = replicate(1d0, nspec) ;1 km/s error on cks vsini
-err = [err_data, 1d-5] ;Make constraint row have tiny error
+
+ ;make constraint row have tiny error
+if lasso_opt then err = [err_data, 1d-8] $
+  else err = err_data
 
 ; watch output
 vis = 1
@@ -362,9 +367,23 @@ functargs = {design_matrix:data_matrix, $
             }
 
 nparams = n_elements(data_matrix[*,0])     
-parinfo = replicate({value:0.0d0, step:1d-2},nparams)
+parinfo = replicate({value:0.0d0, step:1d-5, relstep:0, limited:[0,0], limits:[0d0,0d0]},nparams)
 parinfo[0].value=17.19
 parinfo[0].step = 0.1
+
+; If we're on the 2nd (lasso) iteration, use the ordinary regression
+; coefficients as guesses
+if refit_iteration then begin 
+    parinfo.value = r 
+    parinfo[1:*].step = 0
+    parinfo[1:*].relstep = 0.01
+    parinfo[1:*].limited[0] = 1
+    parinfo[1:*].limited[1] = 1
+    parinfo[1:*].limits[0] = ((r[1:*] - (2*abs(r[1:*]))) < 0d0)
+    parinfo[1:*].limits[1] = ((r[1:*] + (2*abs(r[1:*]))) > 0d0)
+    
+    window, 2
+endif else window, 0
 
 !p.multi = [0,1,2]
 
@@ -396,10 +415,17 @@ if status gt 0 then begin
     endif else lasso_message = "LASSO not used"
         
         ; Plot the result
-    window, 1
+    window, refit_iteration*2+1
     plot, r[1:*], ps=8, xs=2, ys=2, xtit="Param Number", ytit="Param value", $
       tit="RMSE: "+strtrim(rmse,2)+" | "+lasso_message
     oplot, r[1:*], ps=8, color=!red
+
+    refit_iteration++
+    lasso_opt = 1
+    lambda = 0.98 * total(abs(r[1:*]))
+
+    
+    if refit_iteration eq 1 then goto, refit
 
 endif else begin
     
