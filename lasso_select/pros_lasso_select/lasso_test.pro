@@ -63,20 +63,23 @@
 ;;;;;;;;;;;;;;;;;;;;
 ; Function that models Vsini, given design matrix and measured y-values
 
-function lasso_model, params, design_matrix=design_matrix
+function lasso_model, params, design_matrix=design_matrix, lasso_opt=lasso_opt
 
-; Now add the row requiring that the sum of the abs values of params =
-; lambda
-sign_flip_vec = ((params ge 0) * 2) - 1 ;Should be 1 if positive, -1 if negative
-; need to zero the first element, since I don't want to include the
-; constant offset in the lasso
-sign_flip_vec[0] = 0
+if lasso_opt then begin
+    ; Now add the row requiring that the sum of the abs values of params =
+    ; lambda
+    sign_flip_vec = ((params ge 0) * 2) - 1 ;Should be 1 if positive, -1 if negative
+    ; need to zero the first element, since I don't want to include the
+    ; constant offset in the lasso
+    sign_flip_vec[0] = 0
+    
+    constraint_row = params * sign_flip_vec
+    
+    new_design_matrix = [[design_matrix],[constraint_row]]
 
-constraint_row = params * sign_flip_vec
+    model = new_design_matrix ## params
 
-new_design_matrix = [[design_matrix],[constraint_row]]
-
-model = new_design_matrix ## params
+endif else model = design_matrix ## params
 
 model = reform(model)
 
@@ -89,10 +92,10 @@ end
 ;;;;;;;;;;;;;;;;;;;;
 ; Function called by mpfit to optimize the model parameters
 
-function lasso_regress, params, design_matrix=design_matrix, yvals=yvals, err=err, vis=vis
+function lasso_regress, params, design_matrix=design_matrix, yvals=yvals, err=err, vis=vis, lasso_opt=lasso_opt
 
 ; Make the model, given the parameters, x and y data
-model = lasso_model(params, design_matrix=design_matrix)
+model = lasso_model(params, design_matrix=design_matrix, lasso_opt=lasso_opt)
 
 data = yvals
 
@@ -102,26 +105,47 @@ res = data - model
 ; Calculate deviation
 dev = res/err
 
-chi2 = sqrt(total(dev^2, /double))
+;chi2 = sqrt(total(dev^2, /double))
 
-sorti = sort(data)
-sortd = data[sorti]
-sortm = model[sorti]
-sortr = res[sorti]
 
-; Check if lasso constraint is satisfied
-param_tot = total(abs(params[1:*]))
-lasso_tot = model[-1]
+if lasso_opt then begin
 
-if lasso_tot gt param_tot then begin
-    lasso_message = "lasso FAIL"
-endif else lasso_message = "lasso COOOOOL"
-
-if vis eq 1 then begin
+    ; Check if lasso constraint is satisfied
+    param_tot = total(abs(params[1:*]))
+    lasso_lambda = data[-1]
     
+    if param_tot gt lasso_lambda then begin
+        lasso_message = "lasso FAIL! lambda = "+strtrim(lasso_lambda,2)+" | sum of params = "+strtrim(param_tot,2)
+    endif else lasso_message = "lasso COOOOOL! lambda = "+strtrim(lasso_lambda,2)+" | sum of params = "+strtrim(param_tot,2)
+    ; Calculate RMS of just Vsini residuals
+    rmse = sqrt(mean(res[0:-2]^2))
+
+endif else begin
+    
+    lasso_message = "LASSO is off"
+    rmse = sqrt(mean(res^2))
+
+endelse
+    
+if vis eq 1 then begin
+
+    if lasso_opt then begin
+
+        ; Disregard the lasso constraint in the plotting
+        sorti = sort(data[0:-2])
+
+    endif else sorti = sort(data)
+
+
+    ; Sort the data by Vsini for visualization
+    sortd = data[sorti]
+    sortm = model[sorti]
+    sortr = res[sorti]
+
+        
     plot, sortd, ps = 8, xtitle = "File number", ytitle = "Vsini", title = lasso_message, /xs
     oplot, sortm, ps = 8, color = !red
-    plot, sortr, ps = 8, title = "Residuals with RMSE: "+strtrim(stddev(res),2), /xs
+    plot, sortr, ps = 8, title = "Residuals with RMSE: "+strtrim(rmse,2), /xs
     wait, 0.001
 
 endif
@@ -133,7 +157,9 @@ end
 ;;;;;;;;;;;;;;;;;;;;
 
 
-pro lasso_test, lambda
+pro lasso_test, lambda, LASSO=lasso
+
+lasso_opt = keyword_set(lasso)
 
 ;if n_params() ne 1 then message, "Must input regularization parameter lambda!" 
 
@@ -242,11 +268,17 @@ smooth_spec_ol = ml_savgol_spectra(logwl_grid, spectra_ol, width=5)
 ;vsini_train = vsini_ol[train_idx]
 ;vsini_cross = vsini_ol[cross_idx]
 
-; Do some learning curves!
+; Choose features using the old method
+; Correlations
+corr_vec = ml_get_correlation(smooth_spec_ol, vsini_ol)
 
-; use ALL the pixels! bwahahahah!
-; whoops, can't do that. can't have more parameters than spectra
-data = smooth_spec_ol[450:500,*]
+; choose regions
+rwidth = 9
+corrpix = ml_identify_regions(corr_vec, rwidth)
+
+data_corrpix = smooth_spec_ol[corrpix,*]
+
+data = data_corrpix[0:49,*]
 
 
 
@@ -311,7 +343,9 @@ data = 0
 
 ; so let's just add lambda as the last entry in the yvals vector
 yvals_vsini = vsini_ol
-yvals = [yvals_vsini, lambda]
+
+if lasso_opt then yvals = [yvals_vsini, lambda] $
+  else yvals = yvals_vsini
 
 ; error
 err_data = replicate(1d0, nspec) ;1 km/s error on cks vsini
@@ -323,12 +357,14 @@ vis = 1
 functargs = {design_matrix:data_matrix, $
              yvals:yvals, $
              err:err, $
+             lasso_opt:lasso_opt, $
              vis:vis $
             }
 
 nparams = n_elements(data_matrix[*,0])     
-parinfo = replicate({value:0.1d0},nparams)
-;parinfo[0].value=20d0
+parinfo = replicate({value:0.0d0, step:1d-2},nparams)
+parinfo[0].value=17.19
+parinfo[0].step = 0.1
 
 !p.multi = [0,1,2]
 
@@ -341,22 +377,29 @@ r = mpfit('lasso_regress', parinfo=parinfo, functargs=functargs, status=status, 
 if status gt 0 then begin
 
     ; Get the model
-    model = lasso_model(r, design_matrix=data_matrix)
+    model = lasso_model(r, design_matrix=data_matrix, lasso_opt=lasso_opt)
     ; in order to get the residuals
-    residuals = yvals[0:-2] - model[0:-2]
+    if lasso_opt then residuals = yvals[0:-2] - model[0:-2] $
+      else residuals = yvals - model
     ; in order to get RMSE
     rmse = sqrt(mean(residuals^2))
 
-
-    ; Also, check if lasso constraint is satisfied
-    param_tot = total(abs(r[1:*]))
+    if lasso_opt then begin
+        ; Also, check if lasso constraint is satisfied
+        param_tot = total(abs(r[1:*]))
         
-    if param_tot gt lambda then begin
-        lasso_message = "LASSO constraint violated by "+strtrim(param_tot-lambda,2)+" for lambda = "+strtrim(lambda,2)
-    endif else lasso_message = "LASSO constraint satisfied for lambda = "+strtrim(lambda,2)
-    
-    ; Plot the result
-    plot, r[0:-2], ps=8, xs=2, xtit="Param Number", ytit="Param value", tit="RMSE: "+strtrim(rmse,2)+" | "+lasso_message
+        if param_tot gt lambda then begin
+            lasso_message = "LASSO constraint violated by "+ $
+              strtrim(param_tot-lambda,2)+" for lambda = "+strtrim(lambda,2)
+        endif else lasso_message = "LASSO constraint satisfied for lambda = "+ $
+          strtrim(lambda,2)
+    endif else lasso_message = "LASSO not used"
+        
+        ; Plot the result
+    window, 1
+    plot, r[1:*], ps=8, xs=2, ys=2, xtit="Param Number", ytit="Param value", $
+      tit="RMSE: "+strtrim(rmse,2)+" | "+lasso_message
+    oplot, r[1:*], ps=8, color=!red
 
 endif else begin
     
