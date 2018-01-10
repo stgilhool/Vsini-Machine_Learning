@@ -345,10 +345,11 @@ nmax = 200
 if refit_iteration then begin 
 
     guess = r
-    scale = 3d0*r
+    ;scale = 3d0*r
+    scale = r
 
     ftol = 1d-3
-    nmax = 2000
+    nmax = 5000
     
     window, 2
 
@@ -390,14 +391,29 @@ if n_elements(r) eq n_elements(guess) then begin
     endif else lasso_message = "LASSO not used: chi2 = "+strtrim(chi2,2)
         
         ; Plot the result
-    window, refit_iteration*2+1
+    window, refit_iteration*2+1, xs=1200
     plot, r[1:*], ps=8, xs=2, ys=2, xtit="Param Number", ytit="Param value", $
       tit="RMSE: "+strtrim(rmse,2)+" | "+lasso_message
     oplot, r[1:*], ps=8, color=!red
 
+    lower_idx = where(r[1:*] lt rcoeff, nlow, comp=higher_idx, ncomp=nhigh)
+
+    if nlow gt 0 then begin
+        oploterror, lower_idx, rcoeff[lower_idx], $
+          rcoeff[lower_idx]-r[lower_idx+1], ps=8, /lobar, /nohat
+    endif
+
+    if nhigh gt 0 then begin
+        oploterror, higher_idx, rcoeff[higher_idx], $
+          r[higher_idx+1]-rcoeff[higher_idx], ps=8, /hibar, /nohat
+    endif
+
+    ; Draw dashed line at 0
+    oplot, [0,nparams], replicate(0,2), /thick, linest=2
+
     refit_iteration++
     lasso_opt = 1
-    lambda = (chi2/abs_params) * 0.5
+    lambda = (chi2/abs_params)
 
     
     if refit_iteration eq 1 then goto, refit
