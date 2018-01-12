@@ -14,7 +14,10 @@ deltax = mean(dx2)
 if max(dx2)-min(dx2) gt 0.1*deltax then message,"wl grid is too non-linear"
 
 ; nspectra
-nspectra = n_elements(spec_arr[0,*]) 
+spec_arr_size = size(spec_arr, /dim)
+
+if n_elements(spec_arr_size) eq 1 then nspectra = 1 else $
+  nspectra = spec_arr_size[1]
 
 ; Apply savgol filter
 nleft = width/2
