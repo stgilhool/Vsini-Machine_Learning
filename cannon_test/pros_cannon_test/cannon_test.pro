@@ -131,7 +131,7 @@ end
 ;;;;;;;;;;;;;;;;;;;;
 
 
-pro cannon_test, LASSO=lasso
+pro cannon_test
 
 common lasso, design_matrix, yvals, err, vis, lasso_opt, lambda
 
@@ -146,143 +146,78 @@ lasso_opt = keyword_set(lasso)
 ; Data for the overlaps
 overlaps_data = mrdfits('/home/stgilhool/APGBS/spectra/overlaps/apgbs_overlaps_data.fits',1)
 logwl_grid = mrdfits('/home/stgilhool/APGBS/spectra/overlaps/apgbs_overlaps_data.fits',0)
-; Relevant CKS vectors
-;cks_teff = overlaps_data.teff_cks
-;cks_vsini = overlaps_data.vsini_cks
+; Relevant overlap vectors
+teff_ol_cks = overlaps_data.teff_cks
 teff_ol_apg = overlaps_data.teff_apg
 vsini_ol_cks = overlaps_data.vsini_cks
 
-;;; Loop through temperature bins and print cks vsini range, and
-;;; number of spectra
 
-;t0_vec = maken(4650L, 6600L, (6600L-4650L)/100)
-; bs = 100
-; cks_teff_hist = histogram(cks_teff, reverse_indices=ri, min=4650L, binsize=bs)
-; histx = findgen(n_elements(cks_teff_hist))*bs + 4650 
+; Taking just the CKS labels for this test
 
-
-; plot, histx, cks_teff_hist, ps=10
-
-t0 = 6000
-t1 = 6170
-
-t0 = 4700
-t1 = 6600
-
-sel_idx_ol = where(teff_ol_apg ge t0 and teff_ol_apg lt t1 and vsini_ol_cks le 25, $
+sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
                    nsel_ol)
 
 odata = overlaps_data[sel_idx_ol]
-teff_ol = odata.teff_apg
-vsini_ol = odata.vsini_cks
-spectra_ol = odata.spec
 
 
 ;;; Other data
-;as = mrdfits('/home/stgilhool/APOGEE/APOGEE_data/allStar-l31c.2.fits',1)
+
 ; Read in APOGEE data cube
 alldata_file = '/home/stgilhool/APGBS/spectra/apgbs_datacube.fits'
 ad_full = mrdfits(alldata_file, 1)
 
-; conditional statements defining temperature range 
-c0 = 'allstar.teff_apg ge '+strtrim(t0,2)
-c1 = 'allstar.teff_apg lt '+strtrim(t1,2)
-
-nboot = n_bootstrap(c0, c1, allstar=ad_full, ret_idx=ri)
-
-boot_astar_idx = ad_full[ri].allstar_idx
+; Some overlaps are not in data cube due to low S/N. Take those out of
+; ol sample
+boot_astar_idx = ad_full.allstar_idx
 ol_astar_idx = odata.apg_idx
 
 final_astar_idx = cgsetintersection(boot_astar_idx, ol_astar_idx, indices_a=bastar_idx, indices_b=oastar_idx)
 
 ; Further pare down the overlap sample
 odata = odata[oastar_idx]
-teff_ol = teff_ol[oastar_idx]
-vsini_ol = vsini_ol[oastar_idx]
+teff_ol = odata.teff_cks
+teff_ol_apg = odata.teff_apg
+vsini_ol = odata.vsini_cks
 spectra_ol = odata.spec
+error_ol = odata.err
+mask_ol = odata.mask
 
-; Now, eliminate the overlaps from the bootstrap sample
-final_datacube_idx = cgsetdifference(boot_astar_idx, final_astar_idx, positions=new_boot_idx)
+; Smooth that shit, WITH ERRORS!
+smooth_err = []
+smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_ol, width=5, $
+                               savgol_error=smooth_err)
 
-boot_data = ad_full[ri[new_boot_idx]]
+nspec_total = n_elements(odata) 
 
-; test if that worked
-help, ad_full[ri]
-help, boot_data
-;if n_elements(ad_full[ri])-n_elements(boot_data) eq 48 then print, "N_ELEMENTS reduced by 48, as expected" else print, "Uh oh, overlap overlaps suspect!"
-elim_test = cgsetintersection(boot_data.allstar_idx, final_astar_idx, success=elim_check)
-if elim_check then print, "Uh oh, there are still overlaps!" else print, "Okay: no stars in the overlap sample present in the boot sample :)"
-
-help, odata, /str
-help, boot_data, /str
-
+;;; Data readin finished
+print, "Data readin finished"
+print, nspec_total, format='("Number of training spectra = ", I0)'
 stop
+;;;
 
-
-
-; Yay!
-
-
-; Partition
-param_arr = [vsini_ol]
+; Partition into sets. K-fold or leave one out, or two fold for now?
+; Just two-fold for now
+param_arr = [[vsini_ol], [teff_ol]]
 
 nsets = 2L
 
 ;divide points between training and cross-val
-npts_arr = replicate(nsel_ol/nsets, nsets)
-nmod = nsel_ol mod nsets
+npts_arr = replicate(nspec_total/nsets, nsets)
+nmod = nspec_total mod nsets
 npts_arr[0] = npts_arr[0] + nmod
 
-;set_str = ml_partition_data(param_arr, npts_arr, /span)
+set_str = ml_partition_data(param_arr, npts_arr, /span)
 
-;train_idx = set_str.(0)
-;ntrain = n_elements(train_idx) 
-;cross_idx = set_str.(1)
-;ncross = n_elements(cross_idx) 
+train_idx = set_str.(0)
+ntrain = n_elements(train_idx) 
+cross_idx = set_str.(1)
+ncross = n_elements(cross_idx) 
 
-;train_idx = lindgen(23)
-;cross_idx = lindgen(22) + 23
-
-; Smooth that shit
-smooth_spec_ol = ml_savgol_spectra(logwl_grid, spectra_ol, width=5)
+;;;;;;;;;;;;;;;;;;;;
+;;; TRAIN THE MORTAR
+;;;;;;;;;;;;;;;;;;;;
 
 
-; Y-vectors for regression
-;vsini_train = vsini_ol[train_idx]
-;vsini_cross = vsini_ol[cross_idx]
-
-; Choose features using the old method
-; Correlations
-corr_vec = ml_get_correlation(smooth_spec_ol, vsini_ol)
-
-; choose regions
-rwidth = 9
-corrpix = ml_identify_regions(corr_vec, rwidth)
-
-data_corrpix = smooth_spec_ol[corrpix,*]
-
-data = data_corrpix[0:49,*]
-
-
-
-nfeatures = n_elements(data[*,0])
-
-
- 
-rdeg = 1 ; just linear regression
-
-; result_sample = {nfeatures:nfeatures, $
-;                  lambda:lambda, $
-;                  regression_degree:rdeg, $
-;                  rcoeff:dblarr(nfeatures), $
-;                  rconst:0d0, $
-;                  vsini_train:vsini_train, $
-;                  fit_train:vsini_train, $
-;                  rms_train:0d0, $
-;                  vsini_cross:vsini_cross, $
-;                  fit_cross:vsini_cross, $
-;                  rms_cross:0d0}
-                 
 
 ;;; Do Multiple Linear Regression
 
