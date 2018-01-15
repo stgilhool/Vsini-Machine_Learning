@@ -95,7 +95,7 @@ deltax = mean(dx2)
 
 ; if delta x changes a lot in the supplied wl_grid, halt execution
 if max(dx2)-min(dx2) gt 0.1*deltax then message,"wl grid is too non-linear" else $
-  if max(dx2)-min(dx2) ne 0 then begin
+  if abs(max(dx2)-min(dx2)) GT 1d-8 then begin
     print, "WARNING: wl_grid is not evenly spaced! Result will be biased!"
     wait, 1
 endif
@@ -129,7 +129,7 @@ coeff_results = dblarr(npix, nspectra, degree+1)
 error_results = dblarr(npix, nspectra, degree+1)
 
 ; Loop through spectra
-for snum = 0, nspectra-1 do begin
+for snum = 0L, nspectra-1 do begin
 
     tempspec = spec_arr[*,snum]
     temperr = err_arr[*,snum]
@@ -146,7 +146,7 @@ for snum = 0, nspectra-1 do begin
     
 
     ; Step through all the pixels
-    for pixnum = 0, npix-1 do begin
+    for pixnum = 0L, npix-1 do begin
 
         ; make window index vector for tempspec (so no longer center window)
         window_idx = lindgen(width) + pixnum
