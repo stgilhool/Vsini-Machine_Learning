@@ -82,7 +82,7 @@ npix = spec_arr_size[0]
 if n_elements(spec_arr_size) eq 1 then nspectra = 1 else $
   if n_elements(spec_arr_size) eq 2 then nspectra = spec_arr_size[1] else $
   message, "spec_arr must be 1 or 2 dimensional"
-
+    
 ; Simulate the effect of the filter
 
 ; Create design matrix
@@ -90,15 +90,15 @@ z = dindgen(width) - (width/2)
 
 bigm = replicate(1d0, degree+1, width)
 
-print, z, format='("Z= ", I)'
+; print, z, format='("Z= ", I)'
 
-help, bigm
-print, bigm
+; help, bigm
+; print, bigm
 
-help, width
-print, width/2, width, format='("Half-width= ", I, " for W= ", I)
+; help, width
+; print, width/2, width, format='("Half-width= ", I, " for W= ", I)'
 
-stop
+; stop
 
 ; populate columns of design matrix
 for degnum = 1, degree do begin
@@ -166,7 +166,126 @@ return, smooth_spec
         
 end
     
+;;;;;;;;;;;;;;;;;;;;
+
+
+;;;;;;;;;;;;;;;;;;;;
+;;; analytical slope error function
+;;;;;;;;;;;;;;;;;;;;
+
+function deriv_slope_error, wl_grid, spec_arr, err_arr
+
+; nspectra and npix
+spec_arr_size = size(spec_arr, /dim)
+
+npix = spec_arr_size[0]
+
+if n_elements(spec_arr_size) eq 1 then nspectra = 1 else $
+  if n_elements(spec_arr_size) eq 2 then nspectra = spec_arr_size[1] else $
+  message, "spec_arr must be 1 or 2 dimensional"
+
+
+; Shift spec_arr
+spec_plus = shift(spec_arr,-1)
+spec_minus = shift(spec_arr,1)
+; Shift error array
+err_plus = shift(err_arr, -1)
+err_minus = shift(err_arr, 1)
+
+; Shift wavelength grid
+; FIXME just assuming wl_grid is evenly spaced
+wl_plus = shift(wl_grid, -1)
+wl_minus = shift(wl_grid, 1)
+
+delta_wl_vec = wl_plus - wl_grid
+delta_wl = delta_wl_vec[0]
+
+slope_error = sqrt((err_plus^2 + err_minus^2)/2d0) * (1d0/delta_wl)
+
+return, slope_error
+
+
+end
+
+;;;;;;;;;;;;;;;;;;;;
+;;;Monte Carlo approach (twiddle the flux values and see how slope changes)
+function mc_slope_error, wl_grid, spec_arr, err_arr, WIDTH=width, ORDER=order, DEGREE=degree, SAVGOL_ERROR=savgol_error, N_ITER=n_iter
+
+savgol_error = 0
+
+; Keywords
+if n_elements(width) eq 0 then width = 11
+if n_elements(order) eq 0 then order = 1
+if n_elements(degree) eq 0 then degree = 4
+if n_elements(n_iter) eq 0 then n_iter = 1d3
+
+
+; prep wl_grid (automatically take average delta x)
+dx2 = deriv(dindgen(n_elements(wl_grid)), wl_grid)
+deltax = mean(dx2)
+
+; if delta x changes a lot in the supplied wl_grid, halt execution
+if max(dx2)-min(dx2) gt 0.1*deltax then message,"wl grid is too non-linear"
+
+; nspectra and npix
+spec_arr_size = size(spec_arr, /dim)
+
+npix = spec_arr_size[0]
+
+if n_elements(spec_arr_size) eq 1 then nspectra = 1 else $
+  if n_elements(spec_arr_size) eq 2 then nspectra = spec_arr_size[1] else $
+  message, "spec_arr must be 1 or 2 dimensional"
+
+; I guess let's loop through the spectra
+orig_mean = dblarr(npix, nspectra)
+mc_mean = dblarr(npix, nspectra)
+mc_stddev = dblarr(npix, nspectra)
+
+
+for snum = 0, nspectra-1 do begin
+
+    ; Get error and spec for this iteration
+    iterspec = spec_arr[*,snum]
+    itererr = err_arr[*,snum]
+    orig_savgol = ml_savgol_spectra(wl_grid, iterspec, width=width, order=order, $
+                                    degree=degree)
+
+    ; Make big ol array of realizations
+;    iterspecarr = rebin(iterspec, npix, n_iter)
+ ;   itererrarr = rebin(itererr, npix, n_iter)
+
+    iterarr = rebin(iterspec, npix, n_iter) + (rebin(itererr, npix, n_iter) * $
+                                        randomn(seed, npix, n_iter))
+
+    ; Savgol each one
+    iter_result = ml_savgol_spectra(wl_grid, iterarr, width=width, order=order, $
+                                    degree=degree)
+
+    ; Take mean and stddev to estimate error
+    mean_result = median(iter_result, dim=2)
+    stddev_result = stddev(iter_result, dim=2, /nan)
+
+    ; Store results
+    orig_mean[*,snum] = orig_savgol
+    mc_mean[*,snum] = mean_result
+    mc_stddev[*,snum] = stddev_result
+
+endfor
+
+outstr = {ORIG:orig_mean,MC_MEAN:mc_mean,MC_STDDEV:mc_stddev} 
+
+return, outstr
+    
+end
+
+    
+;;;;;;;;;;;;;;;;;;;;    
+
+
         
+;;;;;;;;;;;;;;;;;;;;
+;;; MAIN
+;;;;;;;;;;;;;;;;;;;;
 
 pro slope_error_test
 
@@ -181,8 +300,8 @@ err = data.err
 ; Apply mask
 bad_pix = where(mask ne 0, nbad)
 
-err[305] = 1d0
-;err[bad_pix] = 1d8
+err[305] = 1d5
+;err[bad_pix] = 1d3
 
 ; Apply SAVGOL filter
 slope_savgol = ml_savgol_spectra(logwl_grid, spec, width=5)
@@ -190,12 +309,36 @@ slope_savgol = ml_savgol_spectra(logwl_grid, spec, width=5)
 ; Try manual SAVGOL approach to see if that can return errors
 slope_custom = savgol_custom(logwl_grid, spec, err, width=5, savgol_error=savgol_error)
 
-plot, slope_savgol[300:1000], /thick
-oplot, slope_custom[300:1000], /thick, co=!red
+plot, slope_savgol[280:320], /thick
+oplot, slope_custom[280:320], /thick, co=!red
 
 slope = deriv(logwl_grid, spec)
 
-printcol, slope_savgol[300:310], slope_custom[300:310], (spec[301:311]-spec[299:309])/(2*(6d-6)), slope[300:310], err[300:310], savgol_error[300:310]
+slope_error = deriv_slope_error(logwl_grid, spec, err)
+
+
+
+; Try Monte Carlo approach
+; Take 1d5 realizations of spectrum, given flux errors
+; Do regular savgol on each one
+; Take mean and stddev at each pixel
+mc_str = mc_slope_error(logwl_grid, spec, err, width=5)
+
+help, mc_str, /str
+
+stop
+
+
+
+;printcol, slope_savgol[300:310], slope_custom[300:310],
+;(spec[301:311]-spec[299:309])/(2*(6d-6)), slope[300:310],
+;err[300:310], slope_error[300:310], savgol_error[300:310],
+;mc_str.mc_stddev[300:310]
+printcol, slope_savgol[300:310], slope_custom[300:310], slope[300:310], err[300:310], slope_error[300:310], savgol_error[300:310], mc_str.mc_stddev[300:310]
+
+stop
+
+
 
 ; okay, so this appears to work. One cool thing is that for a single
 ; pixel with high error, the slope error is not bad. This makes sense
@@ -207,7 +350,7 @@ printcol, slope_savgol[300:310], slope_custom[300:310], (spec[301:311]-spec[299:
 ; think err=1 is actually perhaps high enough for all masked pixels,
 ; because we do know that only 0-1 are physical in a continuum
 ; normalized spectrum (modulo noise, so maybe 0-1.5).  So, assuming a
-; decent continuum normalization, it's not to bad to set the flux
+; decent continuum normalization, it's not too bad to set the flux
 ; error to only 1 or 2 or something, rather than 1d8. The errors for
 ; neighboring pixels still blow up, so I just have to make sure to set
 ; the flux error high enough that the errors blow up enough for me to
@@ -216,8 +359,12 @@ printcol, slope_savgol[300:310], slope_custom[300:310], (spec[301:311]-spec[299:
 stop
 ; Determine slope error from analytical thing
 
+; Last word: Looks like they all produce similar errors.  I think the
+; custom_savgol is the most elegant, as it does everything in one
+; shot, and is faster and less memory intensive than the MC
+; approach. I still need to figure out exactly how to handle bad
+; pixels, but that can wait.  I'll break the custom savgol out into
+; it's own function.
 
-
-; Try Monte Carlo approach
 
 end
