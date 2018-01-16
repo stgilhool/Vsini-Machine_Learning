@@ -128,11 +128,12 @@ end
 ;;;;;;;;;;;;;;;;;;;;
 
 
-pro cannon_test, VISUALIZE=visualize
+pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
 vis = keyword_set(visualize)
+skip_opt = keyword_set(skip_opt)
 ;if n_params() ne 1 then message, "Must input regularization parameter lambda!" 
 
 ;;; First, grab some data
@@ -253,6 +254,8 @@ mask_data = mask_ol[*,train_idx]
 mask_bits = lindgen(15)
 mask_dec = long(total(2L^mask_bits))
 
+
+if skip_opt then goto, skip_training
 
 ;;; Begin loop through pixels
 ; Initialize
@@ -388,23 +391,110 @@ mwrfits, outstr, 'training_param_str_0.fits', /create
 
 stop
 
+skip_training:
+
 ;;; Now, the test step
 ; Using the theta and scatter, we optimize the labels for each
 ; spectrum.
 
 ; With this model, I can trivially retrieve the labels for the test set
 
+if skip_opt then begin
+    training_str = mrdfits('training_param_str_0.fits',1)
+    lambda_mask = training_str.lambda_mask
+    scatter_vec = training_str.scatter_vec
+    theta_arr = training_str.theta_arr
+endif
+
+
+
 slope_data_cross = smooth_spec_ol[*,cross_idx]
 err_data_cross = smooth_err[*,cross_idx]
 mask_data_cross = mask_ol[*,cross_idx]
 
 
-;;; Begin loop through pixels
+;;; Begin loop through spectra
 ; Initialize
-lambda_mask = bytarr(npix)
-theta_arr = dblarr(n_elements(design_matrix[*,0]), npix) 
-scatter_vec = dblarr(npix)
+test_status_vec = bytarr(ncross)
+test_label_results = dblarr(n_elements(design_matrix[1:*,0]), ncross) 
+test_label_errors = dblarr(n_elements(design_matrix[1:*,0]), ncross) 
 
+for snum = 0, ncross-1 do begin
+
+    ; Grab the spectrum
+    test_data = slope_data_cross[*,snum]
+
+    test_err = err_data_cross[*,snum]
+
+    test_mask = mask_data_cross[*,snum]
+    test_mask_bin = ((mask_dec and test_mask) < 1)
+    test_mask_idx = where(test_mask_bin ne 0, nmask_test, comp=test_unmask_idx, $
+                          ncomp=nunmask_test)
+    
+    ; Jack up error for masked pixels
+    test_err_masked = test_err
+
+    if nmask_test gt 0 then begin
+        test_err_masked[test_mask_idx] = 1d8
+    endif 
+
+    ; Combine errors
+    test_sigma = sqrt(test_err_masked^2 + scatter_vec)
+
+    ; Test matrix is the theta_arr with first (constant) column
+    ; removed
+    test_constant_vec = reform(theta_arr[0,*])
+
+    test_matrix = theta_arr[1:*,*]
+
+    ; Remove the constant offset from test_data
+    test_yvals = test_data - test_constant_vec
+
+    ; Now, do the regression
+    test_label_vec = regress(test_matrix, test_yvals, measure_errors=test_sigma, $
+                             sigma=label_errors, status=test_status)
+
+    ; Store results
+    test_label_results[*,snum] = reform(test_label_vec)
+    test_label_errors[*,snum] = reform(label_errors)
+    test_status_vec[snum] = test_status
+
+endfor
+
+vsini_cross = vsini_ol[cross_idx]
+teff_cross = teff_ol[cross_idx]
+
+test_vsini = reform(test_label_results[1,*]) + mean(vsini_train)
+test_teff = reform(test_label_results[0,*]) + mean(teff_train)
+
+test_e_vsini = reform(test_label_errors[1,*])
+test_e_teff = reform(test_label_errors[0,*])
+
+; Mark failed guys in red
+failed_idx = where(test_status_vec ne 0, nfail_test)
+
+
+;window, 1, tit="RESULTS!!!", xs=1500, ys=900
+psopen, 'cannon_test.eps', /encaps, /color, xs=10, ys=8, /inches
+
+!p.multi = [0,1,2]
+
+plot, vsini_cross, test_vsini, ps=8, xtit="Vsini (CKS)", ytit="Vsini (Cannon Derivative)", charsize=1.5
+oplot, [-100,100], [-100,100], linest=2, /thick
+oploterror, vsini_cross, test_vsini, test_e_vsini, ps=8
+if nfail_test gt 0 then oploterror, vsini_cross[failed_idx], $
+  test_vsini[failed_idx], test_e_vsini[failed_idx], ps=8, co=!red, errcolor=!red
+
+
+plot, teff_cross, test_teff, ps=8, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, /yno
+oplot, [-1d5, 1d5], [-1d5,1d5], linest=2, /thick
+oploterror, teff_cross, test_teff, test_e_teff, ps=8
+if nfail_test gt 0 then oploterror, teff_cross[failed_idx], $
+  test_teff[failed_idx], test_e_teff[failed_idx], ps=8, co=!red, errcolor=!red
+
+psclose
+
+stop
 
 
 end
