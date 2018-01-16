@@ -66,7 +66,8 @@ function training_step, params
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
   
-s_squared = params[0]
+; enforce s_squared is positive
+s_squared = abs(params[0])
 
 ; At given scatter, calculate the theta
 ; Scatter is added in quadrature to the flux error term
@@ -127,11 +128,11 @@ end
 ;;;;;;;;;;;;;;;;;;;;
 
 
-pro cannon_test
+pro cannon_test, VISUALIZE=visualize
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-vis = 1
+vis = keyword_set(visualize)
 ;if n_params() ne 1 then message, "Must input regularization parameter lambda!" 
 
 ;;; First, grab some data
@@ -192,7 +193,7 @@ ad_full = 0
 ;;; Data readin finished
 print, "Data readin finished"
 print, nspec_total, format='("Number of training spectra = ", I0)'
-stop
+;stop
 ;;;
 
 ; Partition into sets. K-fold or leave one out, or two fold for now?
@@ -254,8 +255,12 @@ mask_dec = long(total(2L^mask_bits))
 
 
 ;;; Begin loop through pixels
+; Initialize
+lambda_mask = bytarr(npix)
+theta_arr = dblarr(n_elements(design_matrix[*,0]), npix) 
+scatter_vec = dblarr(npix)
 
-for pixnum = 300L, npix-1 do begin
+for pixnum = 0L, npix-1 do begin
 
     ; Check if it's the interchip region, or spectacularly bad
     col_mask_dec = reform(mask_data[pixnum,*])
@@ -267,7 +272,16 @@ for pixnum = 300L, npix-1 do begin
         ; This pixel is either interchip, or just terrible
         ; Set slope to 0, and err in slope to 1d8
         ; Or maybe just handle at regression step?
+        
         print, strtrim(pixnum,2)+" is Bad Pixel, moving on to "+strtrim(pixnum+1,2)
+        ; Set scatter to max (don't know what max is yet)
+        ; Let's instead flag the pixel
+        lambda_mask[pixnum] = 1B
+        scatter_vec[pixnum] = !values.d_nan
+
+        ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
+        theta_arr[*,pixnum] = [1d0,0d0,0d0]
+
         continue
     endif
 
@@ -280,35 +294,117 @@ for pixnum = 300L, npix-1 do begin
     ; could just call it with the optimized s to get theta
 
     
-
-
-    
-    
-    
-
     dflux = reform(slope_data[pixnum,*])
     e_dflux = reform(err_data[pixnum,*])
     
     ftol = 1d-5
 
-    guess = [mean(e_dflux, /nan)]  
+    guess = [mean(e_dflux^2, /nan)]  
     scale = guess
 
-    window, 0, xs=1400, ys=900, title="Training at Pixel #: "+strtrim(pixnum,2)
-    !p.multi = [0,1,3]
+    if vis then begin
+        window, 0, xs=1400, ys=900, $
+          title="Training at Pixel #: "+strtrim(pixnum,2)
+        !p.multi = [0,1,3]
+    endif
 
     scatter_lambda = amoeba3(ftol, function_name='training_step', p0=guess, $
                              scale=scale, function_value=fval, $
                              nmax=nmax, ncalls=ncalls)
     
-    !p.multi = 0
+    if vis then !p.multi = 0
     
-    help, scatter_lambda
-    help, ncalls
+    ; Test to see if result converged
+    if scatter_lambda[0] eq -1 then begin
+        
+        ; Mask the pixel
+        lambda_mask[pixnum] = 2B
+        scatter_vec[pixnum] = !values.d_nan
 
-    stop
+        ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
+        theta_arr[*,pixnum] = [1d0,0d0,0d0]
+
+        print, pixnum, format='("WARNING: AMOEBA failed at pixel ",I)'
+        print, ''
+        ; help, scatter_lambda
+;         help, theta_lambda
+;         help, guess
+;         help, scale
+;         print, ''
+        
+        
+        
+    endif else begin
+
+        ; Mark pixel as good
+        lambda_mask[pixnum] = 0B
+
+        ; Store optimized scatter value
+        scatter_i = abs(scatter_lambda[0])
+        scatter_vec[pixnum] = scatter_i
+
+        ; Get theta_lambda by calling the function once more
+        null_var = training_step(scatter_lambda)
+        theta_arr[*,pixnum] = theta_lambda
+
+    endelse
+
+    if ~keyword_set(visualize) then vis = 0
+
+    if pixnum eq 300 or pixnum eq 350 then begin
+        
+        help, theta_arr
+        help, scatter_vec
+        help, lambda_mask
+        
+        vis = 1
+
+        ;stop
+    endif
 
 endfor
+
+print, max(scatter_vec, maxidx, /nan), format='("Maximum scatter is: ",F)'
+
+; Set bad pixels to twice maximum scatter
+
+bad_idx = where(lambda_mask ne 0, nbad)
+
+if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 2d0
+
+outstr = {lambda_mask:lambda_mask, scatter_vec:scatter_vec, theta_arr:theta_arr}
+
+print, "Finished"
+
+print, ''
+
+print, "Continue to write structure to disk"
+
+stop
+
+mwrfits, outstr, 'training_param_str_0.fits', /create
+
+
+
+stop
+
+;;; Now, the test step
+; Using the theta and scatter, we optimize the labels for each
+; spectrum.
+
+; With this model, I can trivially retrieve the labels for the test set
+
+slope_data_cross = smooth_spec_ol[*,cross_idx]
+err_data_cross = smooth_err[*,cross_idx]
+mask_data_cross = mask_ol[*,cross_idx]
+
+
+;;; Begin loop through pixels
+; Initialize
+lambda_mask = bytarr(npix)
+theta_arr = dblarr(n_elements(design_matrix[*,0]), npix) 
+scatter_vec = dblarr(npix)
+
 
 
 end
