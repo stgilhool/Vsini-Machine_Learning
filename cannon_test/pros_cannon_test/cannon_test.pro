@@ -128,12 +128,104 @@ end
 ;;;;;;;;;;;;;;;;;;;;
 
 
-pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt
+pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=description
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
+nlabels_set = 4
+
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
+
+
+; Initialize some stuff
+outpath = '/home/stgilhool/Vsini_ML/cannon_test/data_cannon_test/'
+
+log_file = outpath+"test_log.txt"
+
+readcol, log_file, test_num_col, description_col, structure_flag, plot_flag, $
+  format='I,A,I,I', delimiter="|", $
+  comment="#", /silent, count=ntests
+
+if ntests gt 0 then begin
+
+    ; Last row in test_log
+    prev_test_number = test_num_col[-1]
+    test_description_default = description_col[-1]
+    training_done = structure_flag[-1]
+    test_done = plot_flag[-1]
+
+    if training_done and test_done then begin
+
+        test_number_int = prev_test_number + 1
+        print, test_number_int, format='("Initiating new test number: ",I)'
+        skip_opt = 0
+
+    endif else if training_done and ~test_done then begin
+        
+        test_number_int = prev_test_number
+        print, test_number_int, format='("Continuing test number: ",I)'
+        skip_opt = 1
+
+    endif else begin
+        
+        print, "This wasn't supposed to happen!"
+        stop
+
+    endelse
+
+
+endif else begin
+
+    test_number_int = 0
+    skip_opt = 0
+    test_description_default = ''
+    print, test_number_int, format='("Initiating new test number: ",I)'
+    
+
+endelse
+
+terminate = 0
+
+while terminate eq 0 do begin
+
+    desc_opt = ''
+
+    read, desc_opt, $
+      prompt="Enter Description ["+test_description_default+"]:"
+    
+    if desc_opt eq "" then description = test_description_default $
+    else description = desc_opt
+    
+    print, "Description -> "+description
+
+    cont_opt = ''
+    
+    read, cont_opt, prompt="Continue? (y/n)"
+    
+    case cont_opt of
+        
+        ('y' or 'Y' or 'Yes' or 'yes' or 'YES'): begin
+            print, "Continuing..."
+            print, ""
+            terminate = 1
+            wait, 2
+        end
+        
+        else: begin
+            print, "Re-trying..."
+            print, ""
+        end
+        
+    endcase
+endwhile
+
+
+test_number = strtrim(test_number_int,2)
+
+outfile = outpath+'training_param_str_'+test_number+'.fits'
+
+
 ;if n_params() ne 1 then message, "Must input regularization parameter lambda!" 
 
 ;;; First, grab some data
@@ -178,6 +270,8 @@ vsini_ol = odata.vsini_cks
 spectra_ol = odata.spec
 error_ol = odata.err
 mask_ol = odata.mask
+feh_ol = odata.feh_cks
+logg_ol = odata.logg_cks
 
 ; Smooth that shit, WITH ERRORS!
 smooth_err = []
@@ -236,14 +330,29 @@ ncross = n_elements(cross_idx)
 ; Make design matrix
 teff_train = teff_ol[train_idx]
 vsini_train = vsini_ol[train_idx]
+feh_train = feh_ol[train_idx]
+logg_train = logg_ol[train_idx]
 
 teff_label = teff_train - mean(teff_train)
 vsini_label = vsini_train - mean(vsini_train)
+feh_label = feh_train - mean(feh_train)
+logg_label = logg_train - mean(logg_train)
+
 constant = replicate(1d0, ntrain)
 
-design_matrix = [transpose(constant), transpose(teff_label), transpose(vsini_label)]
+; Full design matrix
+design_matrix = [transpose(constant), transpose(teff_label), transpose(vsini_label), transpose(feh_label), transpose(logg_label)]
+
+; Reduce design matrix labels?
+
+design_matrix = design_matrix[0:nlabels_set,*]
+
 ; no constant column for input to regress function
 label_matrix = design_matrix[1:*,*]
+
+nparam = n_elements(design_matrix[*,0]) 
+nlabels = n_elements(label_matrix[*,0]) 
+
 
 ; Data
 slope_data = smooth_spec_ol[*,train_idx]
@@ -260,7 +369,7 @@ if skip_opt then goto, skip_training
 ;;; Begin loop through pixels
 ; Initialize
 lambda_mask = bytarr(npix)
-theta_arr = dblarr(n_elements(design_matrix[*,0]), npix) 
+theta_arr = dblarr(nparam, npix) 
 scatter_vec = dblarr(npix)
 
 for pixnum = 0L, npix-1 do begin
@@ -283,7 +392,8 @@ for pixnum = 0L, npix-1 do begin
         scatter_vec[pixnum] = !values.d_nan
 
         ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
-        theta_arr[*,pixnum] = [1d0,0d0,0d0]
+        ;theta_arr[*,pixnum] = [1d0,0d0,0d0]
+        theta_arr[*,pixnum] = replicate(0d0, nparam)
 
         continue
     endif
@@ -325,7 +435,7 @@ for pixnum = 0L, npix-1 do begin
         scatter_vec[pixnum] = !values.d_nan
 
         ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
-        theta_arr[*,pixnum] = [1d0,0d0,0d0]
+        theta_arr[*,pixnum] = replicate(0d0, nparam)
 
         print, pixnum, format='("WARNING: AMOEBA failed at pixel ",I)'
         print, ''
@@ -347,7 +457,12 @@ for pixnum = 0L, npix-1 do begin
         scatter_vec[pixnum] = scatter_i
 
         ; Get theta_lambda by calling the function once more
-        null_var = training_step(scatter_lambda)
+        if vis then begin
+            vis = 0
+            null_var = training_step(scatter_lambda)
+            vis = 1
+        endif else null_var = training_step(scatter_lambda)
+        
         theta_arr[*,pixnum] = theta_lambda
 
     endelse
@@ -383,11 +498,22 @@ print, ''
 
 print, "Continue to write structure to disk"
 
+
+
+print, "outfile = "+outfile
+print, "test_number = "+test_number
+print, ""
+
 stop
 
-mwrfits, outstr, 'training_param_str_0.fits', /create
+mwrfits, outstr, outfile, /create
 
+openw, lun, log_file, /get_lun, /append
 
+training_done_string = strjoin([test_number,description,'1','0'], '|')
+
+printf, lun, training_done_string
+free_lun, lun
 
 stop
 
@@ -400,7 +526,7 @@ skip_training:
 ; With this model, I can trivially retrieve the labels for the test set
 
 if skip_opt then begin
-    training_str = mrdfits('training_param_str_0.fits',1)
+    training_str = mrdfits(outfile,1)
     lambda_mask = training_str.lambda_mask
     scatter_vec = training_str.scatter_vec
     theta_arr = training_str.theta_arr
@@ -416,8 +542,8 @@ mask_data_cross = mask_ol[*,cross_idx]
 ;;; Begin loop through spectra
 ; Initialize
 test_status_vec = bytarr(ncross)
-test_label_results = dblarr(n_elements(design_matrix[1:*,0]), ncross) 
-test_label_errors = dblarr(n_elements(design_matrix[1:*,0]), ncross) 
+test_label_results = dblarr(nlabels, ncross) 
+test_label_errors = dblarr(nlabels, ncross) 
 
 for snum = 0, ncross-1 do begin
 
@@ -432,11 +558,13 @@ for snum = 0, ncross-1 do begin
                           ncomp=nunmask_test)
     
     ; Jack up error for masked pixels
-    test_err_masked = test_err
+    ; No, don't do this
+    ; test_err_masked = test_err
 
-    if nmask_test gt 0 then begin
-        test_err_masked[test_mask_idx] = 1d8
-    endif 
+;     if nmask_test gt 0 then begin
+;         test_err_masked[test_mask_idx] = 1d8
+;     endif 
+    test_err_masked = test_err
 
     ; Combine errors
     test_sigma = sqrt(test_err_masked^2 + scatter_vec)
@@ -461,21 +589,42 @@ for snum = 0, ncross-1 do begin
 
 endfor
 
-vsini_cross = vsini_ol[cross_idx]
+
+;Teff
 teff_cross = teff_ol[cross_idx]
-
-test_vsini = reform(test_label_results[1,*]) + mean(vsini_train)
 test_teff = reform(test_label_results[0,*]) + mean(teff_train)
-
-test_e_vsini = reform(test_label_errors[1,*])
 test_e_teff = reform(test_label_errors[0,*])
+
+
+;Vsini
+vsini_cross = vsini_ol[cross_idx]
+test_vsini = reform(test_label_results[1,*]) + mean(vsini_train)
+test_e_vsini = reform(test_label_errors[1,*])
+
+if nlabels ge 3 then begin
+;Feh
+feh_cross = feh_ol[cross_idx]
+test_feh = reform(test_label_results[2,*]) + mean(feh_train)
+test_e_feh = reform(test_label_errors[2,*])
+endif
+
+
+if nlabels ge 4 then begin
+;Logg
+logg_cross = logg_ol[cross_idx]
+test_logg = reform(test_label_results[3,*]) + mean(logg_train)
+test_e_logg = reform(test_label_errors[3,*])
+endif
+
 
 ; Mark failed guys in red
 failed_idx = where(test_status_vec ne 0, nfail_test)
 
 
 ;window, 1, tit="RESULTS!!!", xs=1500, ys=900
-psopen, 'cannon_test.eps', /encaps, /color, xs=10, ys=8, /inches
+plotdir = '/home/stgilhool/Vsini_ML/cannon_test/plots_cannon_test/'
+plotfile = plotdir + 'cannon_test_'+test_number+'.eps'
+psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
 
 !p.multi = [0,1,2]
 
@@ -493,6 +642,23 @@ if nfail_test gt 0 then oploterror, teff_cross[failed_idx], $
   test_teff[failed_idx], test_e_teff[failed_idx], ps=8, co=!red, errcolor=!red
 
 psclose
+
+; Write to the log file that the plot is made
+openw, lun, log_file, /get_lun, /append
+
+; get position of pointer at end of file
+point_lun, -1*lun, eof_pos
+
+; move pointer back two characters (carriage return and final '0')
+point_pos = eof_pos - 2
+point_lun, lun, point_pos
+
+; Delete the final 0
+truncate_lun, lun
+
+; Write the final 1
+printf, lun, '1'
+free_lun, lun
 
 stop
 
