@@ -114,6 +114,63 @@ end
 pro linearity_test
 
 ; Readin spectra
+; Data for the overlaps
+overlaps_data = mrdfits('/home/stgilhool/APGBS/spectra/overlaps/apgbs_overlaps_data.fits',1)
+logwl_grid = mrdfits('/home/stgilhool/APGBS/spectra/overlaps/apgbs_overlaps_data.fits',0)
+; Relevant overlap vectors
+vsini_ol_cks = overlaps_data.vsini_cks
+
+
+; Taking just the CKS labels for this test
+
+sel_idx_ol = where(vsini_ol_cks le 2, nsel_ol)
+
+odata = overlaps_data[sel_idx_ol]
+
+;;; Other data
+
+; Read in APOGEE data cube
+alldata_file = '/home/stgilhool/APGBS/spectra/apgbs_datacube.fits'
+ad_full = mrdfits(alldata_file, 1)
+
+; Some overlaps are not in data cube due to low S/N. Take those out of
+; ol sample
+boot_astar_idx = ad_full.allstar_idx
+ol_astar_idx = odata.apg_idx
+
+final_astar_idx = cgsetintersection(boot_astar_idx, ol_astar_idx, indices_a=bastar_idx, indices_b=oastar_idx)
+
+; Further pare down the overlap sample
+odata = odata[oastar_idx]
+teff_ol = odata.teff_cks
+vsini_ol = odata.vsini_cks
+spectra_ol = odata.spec
+error_ol = odata.err
+mask_ol = odata.mask
+feh_ol = odata.feh_cks
+logg_ol = odata.logg_cks
+
+; Choose a spectrum, broaden it, and look at (non-)linearity
+
+
+; Smooth that shit, WITH ERRORS!
+smooth_err = []
+error_temp = (error_ol < 10d0)
+smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, $
+                                savgol_error=smooth_err)
+
+nspec_total = n_elements(odata) 
+npix = n_elements(spectra_ol[*,0]) 
+; get rid of unnecessary stuff
+overlaps_data = 0
+ad_full = 0
+
+;;; Data readin finished
+print, "Data readin finished"
+print, nspec_total, format='("Number of training spectra = ", I0)'
+;stop
+;;;
+
 
 ; Find one with Vsini_CKS < 1
 
