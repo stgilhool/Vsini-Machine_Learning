@@ -154,14 +154,18 @@ logg_ol = odata.logg_cks
 
 
 ; Smooth that shit, WITH ERRORS!
-smooth_err = []
-error_temp = (error_ol < 10d0)
-smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, $
-                                savgol_error=smooth_err)
+; smooth_err = []
+; error_temp = (error_ol < 10d0)
+; smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, $
+;                                 savgol_error=smooth_err)
 
 nspec_total = n_elements(odata) 
 npix = n_elements(spectra_ol[*,0]) 
 ; get rid of unnecessary stuff
+help, ad_full, /str
+
+;stop
+
 overlaps_data = 0
 ad_full = 0
 
@@ -173,25 +177,10 @@ print, nspec_total, format='("Number of training spectra = ", I0)'
 
 
 ; Find one with Vsini_CKS < 1
-
+sample_spec = spectra_ol[*,0]
 ; Loop and broaden a bunch of times
 
 ; Find correlated pixels and plot slope vs. vsini
-
-npix = 101L
-wl_grid = dindgen(npix)*6d-6 + 4d0
-x = dindgen(npix)-50
-
-fakespec = replicate(1d0, npix)
-
-for linenum = 0, 20 do begin
-
-    depth = randomu(seed, 1)*0.5d0
-    centroid = randomu(seed,1)*(npix-1) - (npix/2)
-    
-    fakespec = fakespec - gaussian(x, [depth, centroid, 1d0])
-
-endfor
 
 nvsini = 101
 vsini_vec = dindgen(nvsini)
@@ -200,11 +189,11 @@ slope_result = dblarr(npix, nvsini)
 
 foreach vsini, vsini_vec, idx do begin
 
-    synth_spec = broaden_spectrum(fakespec, vsini, wl_grid=wl_grid)
+    synth_spec = broaden_spectrum(sample_spec, vsini, wl_grid=logwl_grid)
 
-    if idx eq 0 then synth_spec = fakespec
+    if idx eq 0 then synth_spec = sample_spec
 
-    deriv_spec = ml_savgol_spectra(wl_grid, synth_spec, width=5)
+    deriv_spec = ml_savgol_spectra(logwl_grid, synth_spec, width=5)
 
     slope_result[*,idx] = deriv_spec
 
@@ -226,15 +215,15 @@ corrsort = sort(abs(corr_vec))
 
 for i=0,100 do begin
 
-    pixnum=i
-    ;pixnum = corrsort[i]
+    ;pixnum=i
+    pixnum = corrsort[i]
 
     slope_at_pixel = reform(slope_result[pixnum,*])
 
     fitcoeff = robust_poly_fit(vsini_vec, slope_at_pixel, 5, polyfit, /double)
 
     
-    plot, vsini_vec, slope_at_pixel, ps=8, xs=2, ys=2, tit="Slope at pixel= "+strtrim(i,2)
+    plot, vsini_vec, slope_at_pixel, ps=8, xs=2, ys=2, tit="Slope at pixel= "+strtrim(pixnum,2)
 
     oplot, vsini_vec, polyfit, /thick
 
