@@ -59,6 +59,21 @@
 ;
 ;-
 
+pro sg_scatter_plot, x, y, error, COLORS=colors, _EXTRA=ex
+
+plot, x, y, ps=8, _extra=ex, /nodata
+
+foreach color_i, colors, co_idx do begin
+
+    oplot, [x[co_idx]], [y[co_idx]], color=color_i, ps=8
+    oploterror, [x[co_idx]], [y[co_idx]], [error[co_idx]], ps=8, errcolor=color_i
+
+endforeach
+
+end
+
+
+
 ;;;;;;;;;;;;;;;;;;;;
 ; Function called by amoeba to optimize labels for test spectra
 
@@ -773,12 +788,16 @@ failed_idx = where(test_status_vec ne 0, nfail_test)
 ;window, 1, tit="RESULTS!!!", xs=1500, ys=900
 plotdir = '/home/stgilhool/Vsini_ML/cannon_rot_test/plots_cannon_rot_test/'
 plotfile = plotdir + 'cannon_rot_test_'+test_number+'.eps'
-psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
-
-xyouts, 0.5, 0.95, model_type, alignment=1, charsize=3
-xyouts, 0.05, 0.5, "CANNON - CKS", orientation=90, alignment=1, charsize=3
 
 !p.multi = [0,nlabels_set, nlabels_set]
+
+psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
+;window, 0, xs = 1600, ys=900
+
+;xyouts, 0.5, 0.95, model_type, alignment=1, charsize=3
+;xyouts, 0.05, 0.5, "CANNON - CKS", orientation=90, alignment=1, charsize=3
+
+
 
 nlabels_tot = n_elements(label_names) 
 
@@ -819,12 +838,14 @@ for lab_i = 0, nlabels_tot - 1 do begin
     ; TEFF
     if teff_true then begin
         ; teff_plot = scatterplot(teff_cross, res_teff, symbol='circle', $
-;                                 sym_size=0.2, xtit="Teff (CKS)", $
-;                                 ytit=textoidl('\delta T_eff'), $
+;                                 sym_size=0.2, 
+
 ;                                 magnitude=mag_vec)
         
 ;         rline_teff = plot(teff_plot.xrange, [0,0], /overplot, /thick)
-        cgscatter2d, teff_cross, res_teff, ps=8, fit=0, color=bytscl(mag_vec)
+        sg_scatter_plot, teff_cross, res_teff, sqrt(test_e_teff^2 + 70d0^2), $
+          colors=bytscl(mag_vec), xtit=textoidl('T_{eff} (CKS)'), $
+          ytit=textoidl('\Delta T_{eff}')
         oplot, minmax(teff_cross), replicate(0d0, 2), linest=2, /thick
 
 
@@ -838,7 +859,9 @@ for lab_i = 0, nlabels_tot - 1 do begin
 ;                                magnitude=mag_vec)
         
 ;         rline_feh = plot(feh_plot.xrange, [0,0], /overplot, /thick)
-cgscatter2d, feh_cross, res_feh, ps=8, fit=0, color=bytscl(mag_vec)
+        sg_scatter_plot, feh_cross, res_feh, test_e_feh, $
+          colors=bytscl(mag_vec), xtit=textoidl('[Fe/H] (CKS)'), $
+          ytit=textoidl('\Delta [Fe/H]')
         oplot, minmax(feh_cross), replicate(0d0, 2), linest=2, /thick
             
     endif
@@ -850,8 +873,11 @@ cgscatter2d, feh_cross, res_feh, ps=8, fit=0, color=bytscl(mag_vec)
 ;                                 ytit=textoidl('\delta logg'), $
 ;                                 magnitude=mag_vec)
         
-;         rline_logg = plot(logg_plot.xrange, [0,0], /overplot, /thick)
-cgscatter2d, logg_cross, res_logg, ps=8, fit=0, color=bytscl(mag_vec)
+        ;         rline_logg = plot(logg_plot.xrange, [0,0],
+        ;         /overplot, /thick)
+        sg_scatter_plot, logg_cross, res_logg, test_e_logg, $
+          colors=bytscl(mag_vec), xtit=textoidl('logg (CKS)'), $
+          ytit=textoidl('\Delta logg')
         oplot, minmax(logg_cross), replicate(0d0, 2), linest=2, /thick
 
     endif
@@ -863,10 +889,13 @@ cgscatter2d, logg_cross, res_logg, ps=8, fit=0, color=bytscl(mag_vec)
 ;                                 ytit=textoidl('\delta Vsini'), $
 ;                                  magnitude=mag_vec)
         
-;         rline_vsini = plot(vsini_plot.xrange, [0,0], /overplot, /thick)
-cgscatter2d, vsini_cross, res_vsini, ps=8, fit=0, color=bytscl(mag_vec)
+        ;         rline_vsini = plot(vsini_plot.xrange, [0,0],
+        ;         /overplot, /thick)
+        sg_scatter_plot, vsini_cross, res_vsini, test_e_vsini, $
+          colors=bytscl(mag_vec), xtit=textoidl('vsini (CKS)'), $
+          ytit=textoidl('\Delta vsini')
         oplot, minmax(vsini_cross), replicate(0d0, 2), linest=2, /thick
-            
+        
     endif
 
 
@@ -876,8 +905,6 @@ endfor
 
 
 psclose
-
-stop
 
 ; Write to the log file that the plot is made
 openw, lun, log_file, /get_lun, /append
@@ -895,8 +922,5 @@ truncate_lun, lun
 ; Write the final 1
 printf, lun, '1'
 free_lun, lun
-
-;stop
-
 
 end
