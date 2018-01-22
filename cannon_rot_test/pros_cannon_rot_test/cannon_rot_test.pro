@@ -1,0 +1,902 @@
+;+
+; NAME: Cannon_rot_test
+;
+;
+;
+; PURPOSE: Break the cannon with rotation
+;
+;
+;
+; CATEGORY:
+;
+;
+;
+; CALLING SEQUENCE:
+;
+;
+;
+; INPUTS:
+;
+;
+;
+; OPTIONAL INPUTS:
+;
+;
+;
+; KEYWORD PARAMETERS:
+;
+;
+;
+; OUTPUTS:
+;
+;
+;
+; OPTIONAL OUTPUTS:
+;
+;
+;
+; COMMON BLOCKS:
+;
+;
+;
+; SIDE EFFECTS:
+;
+;
+;
+; RESTRICTIONS:
+;
+;
+;
+; PROCEDURE:
+;
+;
+;
+; EXAMPLE:
+;
+;
+;
+; MODIFICATION HISTORY:
+;
+;-
+
+;;;;;;;;;;;;;;;;;;;;
+; Function called by amoeba to optimize labels for test spectra
+
+function test_step, params
+
+common test, test_matrix, test_sigma, test_data, model_type
+
+nlabels_test = n_elements(params) 
+
+; Loop through to make quadratic terms, if necessary
+if model_type eq 'quadratic' then begin
+    quad_terms = []
+    
+    for label_idx = 0, nlabels_test-1 do begin
+        
+        label_i = params[label_idx]
+        
+        label_others = params[label_idx:*]
+        
+        label_i_terms = label_i * label_others
+        
+        quad_terms = [quad_terms, label_i_terms]
+        
+    endfor
+
+    ; Full label vector
+
+    labels = [1d0, params, quad_terms] 
+    
+endif else labels = [1d0, params]
+  
+; Do the matrix multiplication (Y = M Labels), where M is test_matrix
+; (thetas)
+model = test_matrix ## labels
+
+model = reform(model)
+
+
+residuals = model - test_data
+
+chi2 = total((residuals/test_sigma)^2d0,/double)
+
+; Minimize chi2 (but don't overfit)
+
+dof = n_elements(test_data)-n_elements(labels) 
+
+chi2_per_dof = chi2/dof
+
+chi2_diff = abs(chi2_per_dof - 1d0)
+
+
+return, chi2_diff
+
+end
+
+;;;;;;;;;;;;;;;;;;;;
+; Function called by amoeba to optimize s^2 (and consequenty theta)
+
+function training_step, params
+
+common training, label_matrix, flux, e_flux, theta_lambda, vis
+  
+; enforce s_squared is positive
+s_squared = abs(params[0])
+
+; At given scatter, calculate the theta
+; Scatter is added in quadrature to the flux error term
+error_lambda = sqrt(e_flux^2d0 + s_squared)
+
+theta_fit = regress(label_matrix, flux, measure_errors=error_lambda, $
+                    const=theta_const, yfit=model_flux, status=rstatus, /double)
+; reform column vecs
+theta_fit = reform(theta_fit)
+model_flux = reform(model_flux)
+
+theta_iter = [theta_const, theta_fit]
+
+if rstatus eq 0 then theta_lambda = theta_iter
+    
+; Calculate the residuals
+residuals = model_flux - flux
+
+chi2 = total((residuals/error_lambda)^2d0,/double)
+
+; In this formulation, chi2 can be arbitrarily small. I want to
+; minimize the difference between chi2/dof and 1
+
+dof = n_elements(flux)-n_elements(theta_iter) 
+
+chi2_per_dof = chi2/dof
+
+chi2_diff = abs(chi2_per_dof - 1d0)
+
+; penalize chi2 if bad regression
+if rstatus ne 0 then chi2_diff = chi2_diff * 1.5
+
+if vis eq 1 then begin
+
+    ; Sort the data by Vsini for visualization
+    ;vsini = reform(label_matrix[1,*])
+    ; Sort the data by Teff for visualization
+    ;teff = reform(label_matrix[0,*])
+
+    ;plot, vsini, dflux, ps=8, symsize=0.5, xs=2, ys=2, xtit="Vsini", ytit="dF/dWL"
+    ;oplot, vsini, model_dflux, ps=8, symsize=0.5, co=!red
+    
+    ;plot, teff, dflux, ps=8, symsize=0.5, xs=2, ys=2, xtit="Teff", ytit="dF/dWL"
+    ;oplot, teff, model_dflux, ps=8, symsize=0.5, co=!red
+
+    plot, residuals, ps=8, ytit="Residuals", tit="Scatter = "+ $
+      strtrim(s_squared, 2)+$
+      " | Chi2 = "+strtrim(chi2_per_dof,2), xs=2, ys=2, charsize=2
+    oplot, n_elements(residuals)*[-2,2], [0d0,0d0], linest=2, /thick
+
+    wait, 0.001
+
+endif
+
+return, chi2_diff
+
+end
+
+;;;;;;;;;;;;;;;;;;;;
+
+
+;;;;;;;;;;;;;;;;;;;;
+;;; MAIN
+;;;;;;;;;;;;;;;;;;;;
+
+
+pro cannon_rot_test, VISUALIZE=visualize
+
+common training, label_matrix, flux, e_flux, theta_lambda, vis
+
+; Hardcode the settings
+label_names    = ['Teff', '[Fe/H]', 'logg', 'Vsini']
+label_settings = [     1,        1,      1,       0]
+
+model_names    = ['linear', 'quadratic']
+model_settings = [       1,           0]
+
+if total(model_settings) ne 1 then message, "One and only one model must be chosen"
+
+
+nlabels_set = total(label_settings)
+
+vis = keyword_set(visualize)
+
+; Initialize some stuff, and ask user for description
+outpath = '/home/stgilhool/Vsini_ML/cannon_rot_test/data_cannon_rot_test/'
+
+log_file = outpath+"rot_test_log.txt"
+
+readcol, log_file, test_num_col, description_col, structure_flag, plot_flag, $
+  format='I,A,I,I', delimiter="|", $
+  comment="#", /silent, count=ntests
+
+if ntests gt 0 then begin
+
+    ; Last row in test_log
+    prev_test_number = test_num_col[-1]
+    test_description_default = description_col[-1]
+    training_done = structure_flag[-1]
+    test_done = plot_flag[-1]
+
+    if training_done and test_done then begin
+
+        test_number_int = prev_test_number + 1
+        print, test_number_int, format='("Initiating new test number: ",I)'
+        skip_opt = 0
+
+    endif else if training_done and ~test_done then begin
+        
+        test_number_int = prev_test_number
+        print, test_number_int, format='("Continuing test number: ",I)'
+        skip_opt = 1
+
+    endif else begin
+        
+        print, "This wasn't supposed to happen!"
+        stop
+
+    endelse
+
+
+endif else begin
+
+    test_number_int = 0
+    skip_opt = 0
+    test_description_default = ''
+    print, test_number_int, format='("Initiating new test number: ",I)'
+    
+
+endelse
+
+terminate = 0
+
+while terminate eq 0 do begin
+
+    desc_opt = ''
+
+    read, desc_opt, $
+      prompt="Enter Description ["+test_description_default+"]:"
+    
+    if desc_opt eq "" then description = test_description_default $
+    else description = desc_opt
+    
+    print, "Description -> "+description
+
+    cont_opt = ''
+    
+    read, cont_opt, prompt="Continue? (y/n)"
+    
+    case cont_opt of
+        
+        ('y' or 'Y' or 'Yes' or 'yes' or 'YES'): begin
+            print, "Continuing..."
+            print, ""
+            terminate = 1
+            wait, 2
+        end
+        
+        ('n' or 'N' or 'No' or 'no' or 'NO'): begin
+            print, "Terminating..."
+            print, ""
+            return
+        end
+
+
+        else: begin
+            print, "Re-trying..."
+            print, ""
+        end
+        
+    endcase
+endwhile
+
+
+test_number = strtrim(test_number_int,2)
+
+outfile = outpath+'training_param_str_'+test_number+'.fits'
+
+;;; First, grab some data
+;Need spectra, parameters, and map between spectra and parameters
+
+; Data for the overlaps
+overlaps_data = mrdfits('/home/stgilhool/APGBS/spectra/overlaps/apgbs_overlaps_data.fits',1)
+logwl_grid = mrdfits('/home/stgilhool/APGBS/spectra/overlaps/apgbs_overlaps_data.fits',0)
+; Relevant overlap vectors
+vsini_ol_cks = overlaps_data.vsini_cks
+
+
+; Taking just the CKS labels for this test
+
+sel_idx_ol = where(vsini_ol_cks le 2, $
+                   nsel_ol)
+
+odata = overlaps_data[sel_idx_ol]
+
+
+;;; Other data
+
+; Read in APOGEE data cube
+alldata_file = '/home/stgilhool/APGBS/spectra/apgbs_datacube.fits'
+ad_full = mrdfits(alldata_file, 1)
+
+; Some overlaps are not in data cube due to low S/N. Take those out of
+; ol sample
+boot_astar_idx = ad_full.allstar_idx
+ol_astar_idx = odata.apg_idx
+
+final_astar_idx = cgsetintersection(boot_astar_idx, ol_astar_idx, indices_a=bastar_idx, indices_b=oastar_idx)
+
+; Further pare down the overlap sample
+odata = odata[oastar_idx]
+teff_ol = odata.teff_cks
+teff_ol_apg = odata.teff_apg
+vsini_ol = odata.vsini_cks
+spectra_ol = odata.spec
+error_ol = odata.err
+mask_ol = odata.mask
+feh_ol = odata.feh_cks
+logg_ol = odata.logg_cks
+
+; How about we try the CANNON without any fake spectra?
+nspec_total = n_elements(odata) 
+npix = n_elements(spectra_ol[*,0]) 
+
+; get rid of unnecessary stuff
+overlaps_data = 0
+ad_full = 0
+
+;;; Data readin finished
+print, "Data readin finished"
+print, nspec_total, format='("Number of training spectra = ", I0)'
+
+; Partition into sets. K-fold or leave one out, or two fold for now?
+; Just two-fold for now
+param_arr = [[teff_ol], [feh_ol], [logg_ol]]
+
+nsets = 2L
+
+;divide points between training and cross-val
+npts_arr = replicate(nspec_total/nsets, nsets)
+nmod = nspec_total mod nsets
+npts_arr[0] = npts_arr[0] + nmod
+
+set_str = ml_partition_data(param_arr, npts_arr, /span)
+
+train_idx = set_str.(0)
+ntrain = n_elements(train_idx) 
+cross_idx = set_str.(1)
+ncross = n_elements(cross_idx) 
+
+;;;;;;;;;;;;;;;;;;;;
+;;; TRAIN THE CANNON
+;;;;;;;;;;;;;;;;;;;;
+
+;;; Do Multiple Linear Regression
+
+; Step through each pixel
+
+; Inter chip: all masked - do something simple (0 slope, high error)
+; Bad wavelegth: many masked - probably something similar... take median
+;                          of good values, set error high
+; Normal wavelength: some masked - process normally. individual pixel
+;                                  should have high uncertainty
+
+; Make design matrix
+teff_train = teff_ol[train_idx]
+vsini_train = vsini_ol[train_idx]
+feh_train = feh_ol[train_idx]
+logg_train = logg_ol[train_idx]
+
+teff_label = teff_train - mean(teff_train)
+vsini_label = vsini_train - mean(vsini_train)
+feh_label = feh_train - mean(feh_train)
+logg_label = logg_train - mean(logg_train)
+
+constant = replicate(1d0, ntrain)
+
+; Contruct full design matrix
+
+full_matrix_transpose = [[constant],[teff_label],$
+                         [feh_label],[logg_label],[vsini_label]]
+
+label_set_idx = where(label_settings eq 1)
+
+linear_matrix_transpose = full_matrix_transpose[*,[0,label_set_idx+1]]
+
+
+; Add quadratic terms, if necessary
+if model_settings[1] eq 1 then begin
+    ; Initialize some stuff for making the quadratic terms
+    quad_matrix_transpose = []
+    
+    ; Loop through to make quadratic terms
+    for label_idx = 1, nlabels_set do begin
+        
+        label_i = full_matrix_transpose[*,label_idx]
+        
+        label_others = full_matrix_transpose[*,label_idx:nlabels_set]
+        
+        quad_term = rebin(label_i, size(label_others, /dim)) * label_others
+        
+        quad_matrix_transpose = [[quad_matrix_transpose],[quad_term]]
+                
+    endfor
+
+    design_matrix_transpose = [[linear_matrix_transpose], [quad_matrix_transpose]]
+
+endif else if model_settings[0] eq 1 then begin
+
+    ; linear case
+    design_matrix_transpose = linear_matrix_transpose
+
+endif else message, "Model incorrectly specified"
+    
+design_matrix = transpose(design_matrix_transpose)
+
+; no constant column for input to regress function
+label_matrix = design_matrix[1:*,*]
+
+nparam = n_elements(design_matrix[*,0]) 
+nlabel_columns = n_elements(label_matrix[*,0]) 
+
+
+; Data
+flux_data = spectra_ol[*,train_idx]
+err_data = error_ol[*,train_idx]
+mask_data = mask_ol[*,train_idx]
+
+; Using all pixel masks for now
+mask_bits = lindgen(15)
+mask_dec = long(total(2L^mask_bits))
+
+
+if skip_opt then goto, skip_training
+
+;;; Begin loop through pixels
+; Initialize
+lambda_mask = bytarr(npix)
+theta_arr = dblarr(nparam, npix) 
+scatter_vec = dblarr(npix)
+
+for pixnum = 0L, npix-1 do begin
+
+    ; Check if it's the interchip region, or spectacularly bad
+    col_mask_dec = reform(mask_data[pixnum,*])
+    col_mask_bin = ((mask_dec and col_mask_dec) < 1) ;Set all masked pixels to 1
+
+    col_mask_idx = where(col_mask_bin eq 1, n_masked, comp=gd_idx, ncomp=ngood)
+
+    if n_masked ge (floor(0.95*ntrain)) then begin
+        ; This pixel is either interchip, or just terrible
+                
+        print, strtrim(pixnum,2)+" is Bad Pixel, moving on to "+strtrim(pixnum+1,2)
+        ; Set scatter to max (don't know what max is yet)
+        ; Let's instead flag the pixel
+        lambda_mask[pixnum] = 1B
+        scatter_vec[pixnum] = !values.d_nan
+
+        ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
+        ;theta_arr[*,pixnum] = [1d0,0d0,0d0]
+        theta_arr[*,pixnum] = replicate(0d0, nparam)
+
+        continue
+    endif
+
+    ;;; Set up amoeba
+    ; We are optimizing for theta and s(catter). Actually, just s, at
+    ; the amoeba level, I think. At each s, theta is determined by
+    ; linear algebra (we can use regress, I think). So we need the
+    ; amoeba function to return s, and preferably theta, though we
+    ; could just call it with the optimized s to get theta
+
+    
+    flux = reform(flux_data[pixnum,*])
+    e_flux = reform(err_data[pixnum,*])
+    
+    ; Set flagged pixel error high
+    e_flux[col_mask_idx] = 1d8
+
+    ftol = 1d-5
+
+    guess = [median(e_flux^2)]  
+    scale = guess
+
+    if vis then begin
+        window, 0, xs=1400, ys=900, $
+          title="Training at Pixel #: "+strtrim(pixnum,2)
+        ;!p.multi = [0,1,3]
+    endif
+
+    scatter_lambda = amoeba3(ftol, function_name='training_step', p0=guess, $
+                             scale=scale, function_value=fval, $
+                             nmax=nmax, ncalls=ncalls)
+    
+    if vis then !p.multi = 0
+    
+    ; Test to see if result converged
+    if scatter_lambda[0] eq -1 then begin
+        
+        ; Mask the pixel
+        lambda_mask[pixnum] = 2B
+        scatter_vec[pixnum] = !values.d_nan
+
+        ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
+        theta_arr[*,pixnum] = replicate(0d0, nparam)
+
+        print, pixnum, format='("WARNING: AMOEBA failed at pixel ",I)'
+        print, ''
+                
+        
+    endif else begin
+
+        ; Mark pixel as good
+        lambda_mask[pixnum] = 0B
+
+        ; Store optimized scatter value
+        scatter_i = abs(scatter_lambda[0])
+        scatter_vec[pixnum] = scatter_i
+
+        ; Get theta_lambda by calling the function once more
+        if vis then begin
+            vis = 0
+            null_var = training_step(scatter_lambda)
+            vis = 1
+        endif else null_var = training_step(scatter_lambda)
+        
+        theta_arr[*,pixnum] = theta_lambda
+
+    endelse
+
+    if ~keyword_set(visualize) then vis = 0
+
+    if pixnum eq 300 or pixnum eq 350 then begin
+        
+        help, theta_arr
+        help, scatter_vec
+        help, lambda_mask
+        
+        ;vis = 1
+
+        ;stop
+    endif
+
+endfor
+
+print, max(scatter_vec, /nan), format='("Maximum scatter is: ",F0)'
+
+; Set bad pixels to twice maximum scatter
+
+bad_idx = where(lambda_mask ne 0, nbad)
+
+if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 2d0
+
+outstr = {lambda_mask:lambda_mask, scatter_vec:scatter_vec, theta_arr:theta_arr}
+
+print, "Finished"
+
+print, ''
+
+print, "Continue to write structure to disk"
+
+print, "outfile = "+outfile
+print, "test_number = "+test_number
+print, ""
+
+; Write results
+mwrfits, outstr, outfile, /create
+
+openw, lun, log_file, /get_lun, /append
+
+training_done_string = strjoin([test_number,description,'1','0'], '|')
+
+printf, lun, training_done_string
+free_lun, lun
+
+
+skip_training:
+
+;;; Now, the test step
+; Using the theta and scatter, we optimize the labels for each
+; spectrum.
+
+if skip_opt then begin
+    training_str = mrdfits(outfile,1)
+    lambda_mask = training_str.lambda_mask
+    scatter_vec = training_str.scatter_vec
+    theta_arr = training_str.theta_arr
+endif
+
+data_cross = spectra_ol[*,cross_idx]
+err_data_cross = error_ol[*,cross_idx]
+mask_data_cross = mask_ol[*,cross_idx]
+
+
+;;; Begin loop through spectra
+; Initialize
+
+common test, test_matrix, test_sigma, test_data, model_type
+
+model_type = model_names[where(model_settings eq 1)]
+
+nlabels_test = nlabels_set
+
+test_status_vec = bytarr(ncross)
+test_label_results = dblarr(nlabels_test, ncross) 
+test_label_errors = dblarr(nlabels_test, ncross) 
+
+for snum = 0, ncross-1 do begin
+
+    ; Grab the spectrum
+    test_data = data_cross[*,snum]
+
+    test_err = err_data_cross[*,snum]
+    
+    ; Mask wavelengths that are masked in the spectrum, and those that
+    ; failed in training
+    test_mask = mask_data_cross[*,snum]
+    test_mask_bin = (((mask_dec and test_mask) + lambda_mask) < 1)
+    test_mask_idx = where(test_mask_bin ne 0, nmask_test, comp=test_unmask_idx, $
+                          ncomp=nunmask_test)
+    
+    ; Jack up error for masked pixels
+    test_err_masked = test_err
+    if nmask_test gt 0 then begin
+        test_err_masked[test_mask_idx] = 1d8
+    endif
+
+    ; Combine errors
+    test_sigma = sqrt(test_err_masked^2 + scatter_vec)
+
+
+    ; Test_matrix (design matrix) is theta_arr
+    test_matrix = theta_arr
+    
+    ; Make covariance matrix for returning label error estimates
+    ; It's [ M^T C^-1 M ]^-1
+    
+    inverse_covar = diag_matrix(1d0/(test_sigma^2d0))
+        
+    dm_trans = transpose(test_matrix)
+    
+    ; Do the thing in the brackets
+    invco_dm = inverse_covar ## test_matrix
+    thing_in_brackets = dm_trans ## invco_dm
+    
+    ; Get the output covariance matrix
+    covar_matrix = invert(thing_in_brackets, covar_stat, /double)
+
+    ;;; We need to use amoeba to optimize the labels
+    ; INPUTS: theta_arr, test_sigma, test_data, guess (a vector of
+    ; nlabels_set)
+    ; FIXME: Add covariance matrix to common block (test) in order to
+    ; get label errors back from the test step
+
+
+    ftol_test = 1d-5
+    test_guess_all = [mean(teff_train), mean(feh_train), mean(logg_train), $
+                      mean(vsini_train)]
+    test_scale_all = [1000d0, 1d0, 2d0, 10d0]
+
+    test_guess = test_guess_all[label_set_idx]
+    test_scale = test_scale_all[label_set_idx]
+    nmax_test = 5000
+
+
+    test_results = amoeba3(ftol_test, function_name='test_step', $
+                             p0=test_guess, scale=test_scale, $
+                             function_value=fval_test, $
+                             nmax=nmax_test, ncalls=ncalls_test)
+    
+
+
+    
+
+    ; Store results
+    if n_elements(test_results) eq 1 then begin
+
+        print, "AMOEBA failed in the test step. Results are bad for spec number "+strtrim(snum,2)
+        test_label_results[*,snum] = replicate(!values.d_nan, nlabels_set)
+        test_label_errors[*,snum] = replicate(!values.d_nan, nlabels_set)
+        test_status_vec[snum] = 1
+
+    endif else begin
+
+        test_label_results[*,snum] = test_results
+
+        output_variances = diag_matrix(covar_matrix)
+        label_variances = output_variances[1:nlabels_set]
+        
+        test_label_errors[*,snum] = sqrt(label_variances)
+        test_status_vec[snum] = 0
+
+    endelse
+endfor
+
+
+; This is pretty dumb
+;Teff
+if label_settings[0] eq 1 then begin
+    teff_cross = teff_ol[cross_idx]
+    test_teff = reform(test_label_results[0,*]) + mean(teff_train)
+    test_e_teff = reform(test_label_errors[0,*])
+    res_teff = test_teff-teff_cross
+    teff_true = 1
+endif else teff_true = 0
+
+if label_settings[1] eq 1 then begin
+    ;Feh
+    feh_cross = feh_ol[cross_idx]
+    feh_label_idx = where(label_set_idx eq 1, noops)
+    if noops eq 0 then message, "Problem with feh idx"
+
+    test_feh = reform(test_label_results[feh_label_idx,*]) + mean(feh_train)
+    test_e_feh = reform(test_label_errors[feh_label_idx,*])
+    res_feh = test_feh - feh_cross
+    feh_true = 1
+endif else feh_true = 0
+
+if label_settings[2] eq 1 then begin
+    ;Logg
+    logg_cross = logg_ol[cross_idx]
+    logg_label_idx = where(label_set_idx eq 2, noops)
+    if noops eq 0 then message, "Problem with logg idx"
+
+    test_logg = reform(test_label_results[logg_label_idx,*]) + mean(logg_train)
+    test_e_logg = reform(test_label_errors[logg_label_idx,*])
+    res_logg = test_logg - logg_cross
+    logg_true = 1
+endif else logg_true = 0
+
+if label_settings[3] eq 1 then begin
+    ;Vsini
+    vsini_cross = vsini_ol[cross_idx]
+    vsini_label_idx = where(label_set_idx eq 3, noops)
+    if noops eq 0 then message, "Problem with vsini idx"
+
+    test_vsini = reform(test_label_results[vsini_label_idx,*]) + mean(vsini_train)
+    test_e_vsini = reform(test_label_errors[vsini_label_idx,*])
+    res_vsini = test_vsini - vsini_cross
+    vsini_true = 1
+endif else vsini_true = 0
+
+
+; Mark failed guys in red
+failed_idx = where(test_status_vec ne 0, nfail_test)
+
+
+;window, 1, tit="RESULTS!!!", xs=1500, ys=900
+plotdir = '/home/stgilhool/Vsini_ML/cannon_rot_test/plots_cannon_rot_test/'
+plotfile = plotdir + 'cannon_rot_test_'+test_number+'.eps'
+psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
+
+xyouts, 0.5, 0.95, model_type, alignment=1, charsize=3
+xyouts, 0.05, 0.5, "CANNON - CKS", orientation=90, alignment=1, charsize=3
+
+!p.multi = [0,nlabels_set, nlabels_set]
+
+nlabels_tot = n_elements(label_names) 
+
+for lab_i = 0, nlabels_tot - 1 do begin
+
+    
+    if label_settings[lab_i] eq 1 then begin
+        ; Make color bar for lab_i, if it's included
+        case lab_i of
+
+            0: begin
+                mag_vec = teff_cross
+                cbar_title = "Teff (CKS)"
+            end
+
+            1: begin
+                mag_vec = feh_cross
+                cbar_title = "[Fe/H] (CKS)"
+            end
+
+            2: begin
+                mag_vec = logg_cross
+                cbar_title = "Logg (CKS)"
+            end
+
+            3: begin
+                mag_vec = vsini_cross
+                cbar_title = "Vsini (CKS)"
+            end
+
+            else: message, "Error in label settings jawn"
+                
+        endcase
+        
+
+    endif else continue
+
+    ; TEFF
+    if teff_true then begin
+        ; teff_plot = scatterplot(teff_cross, res_teff, symbol='circle', $
+;                                 sym_size=0.2, xtit="Teff (CKS)", $
+;                                 ytit=textoidl('\delta T_eff'), $
+;                                 magnitude=mag_vec)
+        
+;         rline_teff = plot(teff_plot.xrange, [0,0], /overplot, /thick)
+        cgscatter2d, teff_cross, res_teff, ps=8, fit=0, color=bytscl(mag_vec)
+        oplot, minmax(teff_cross), replicate(0d0, 2), linest=2, /thick
+
+
+    endif
+
+    ; FEH
+    if feh_true then begin
+        ; feh_plot = scatterplot(feh_cross, res_feh, symbol='circle', $
+;                                sym_size=0.2, xtit="[Fe/H] (CKS)", $
+;                                ytit=textoidl('\delta [Fe/H]'), $
+;                                magnitude=mag_vec)
+        
+;         rline_feh = plot(feh_plot.xrange, [0,0], /overplot, /thick)
+cgscatter2d, feh_cross, res_feh, ps=8, fit=0, color=bytscl(mag_vec)
+        oplot, minmax(feh_cross), replicate(0d0, 2), linest=2, /thick
+            
+    endif
+
+    ; LOGG
+    if logg_true then begin
+        ; logg_plot = scatterplot(logg_cross, res_logg, symbol='circle', $
+;                                 sym_size=0.2, xtit="Logg (CKS)", $
+;                                 ytit=textoidl('\delta logg'), $
+;                                 magnitude=mag_vec)
+        
+;         rline_logg = plot(logg_plot.xrange, [0,0], /overplot, /thick)
+cgscatter2d, logg_cross, res_logg, ps=8, fit=0, color=bytscl(mag_vec)
+        oplot, minmax(logg_cross), replicate(0d0, 2), linest=2, /thick
+
+    endif
+
+    ; VSINI
+    if vsini_true then begin
+        ; vsini_plot = scatterplot(vsini_cross, res_vsini, symbol='circle', $
+;                                 sym_size=0.2, xtit="Vsini (CKS)", $
+;                                 ytit=textoidl('\delta Vsini'), $
+;                                  magnitude=mag_vec)
+        
+;         rline_vsini = plot(vsini_plot.xrange, [0,0], /overplot, /thick)
+cgscatter2d, vsini_cross, res_vsini, ps=8, fit=0, color=bytscl(mag_vec)
+        oplot, minmax(vsini_cross), replicate(0d0, 2), linest=2, /thick
+            
+    endif
+
+
+;    c = colorbar(orientation=1, title=cbar_title)
+
+endfor
+
+
+psclose
+
+stop
+
+; Write to the log file that the plot is made
+openw, lun, log_file, /get_lun, /append
+
+; get position of pointer at end of file
+point_lun, -1*lun, eof_pos
+
+; move pointer back two characters (carriage return and final '0')
+point_pos = eof_pos - 2
+point_lun, lun, point_pos
+
+; Delete the final 0
+truncate_lun, lun
+
+; Write the final 1
+printf, lun, '1'
+free_lun, lun
+
+;stop
+
+
+end
