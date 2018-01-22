@@ -213,7 +213,7 @@ label_names    = ['Teff', '[Fe/H]', 'logg', 'Vsini']
 label_settings = [     1,        1,      1,       0]
 
 model_names    = ['linear', 'quadratic']
-model_settings = [       1,           0]
+model_settings = [       0,           1]
 
 if total(model_settings) ne 1 then message, "One and only one model must be chosen"
 
@@ -922,5 +922,7 @@ truncate_lun, lun
 ; Write the final 1
 printf, lun, '1'
 free_lun, lun
+
+stop
 
 end
