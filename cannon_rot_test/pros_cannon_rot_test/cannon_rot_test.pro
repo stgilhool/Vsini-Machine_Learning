@@ -213,7 +213,7 @@ label_names    = ['Teff', '[Fe/H]', 'logg', 'Vsini']
 label_settings = [     1,        1,      1,       0]
 
 model_names    = ['linear', 'quadratic']
-model_settings = [       0,           1]
+model_settings = [       1,           0]
 
 if total(model_settings) ne 1 then message, "One and only one model must be chosen"
 
@@ -315,7 +315,7 @@ endwhile
 test_number = strtrim(test_number_int,2)
 
 outfile = outpath+'training_param_str_'+test_number+'.fits'
-
+median_outfile = outpath+'training_median_str_'+test_number+'.fits'
 ;;; First, grab some data
 ;Need spectra, parameters, and map between spectra and parameters
 
@@ -348,6 +348,7 @@ ol_astar_idx = odata.apg_idx
 final_astar_idx = cgsetintersection(boot_astar_idx, ol_astar_idx, indices_a=bastar_idx, indices_b=oastar_idx)
 
 ; Further pare down the overlap sample
+
 odata = odata[oastar_idx]
 teff_ol = odata.teff_cks
 teff_ol_apg = odata.teff_apg
@@ -359,6 +360,10 @@ feh_ol = odata.feh_cks
 logg_ol = odata.logg_cks
 
 ; How about we try the CANNON without any fake spectra?
+
+
+
+
 nspec_total = n_elements(odata) 
 npix = n_elements(spectra_ol[*,0]) 
 
@@ -370,23 +375,11 @@ ad_full = 0
 print, "Data readin finished"
 print, nspec_total, format='("Number of training spectra = ", I0)'
 
-; Partition into sets. K-fold or leave one out, or two fold for now?
-; Just two-fold for now
-param_arr = [[teff_ol], [feh_ol], [logg_ol]]
+;;; LEAVE-ONE-OUT
+ncross = 1L
+ntrain = nspec_total - 1L
 
-nsets = 2L
-
-;divide points between training and cross-val
-npts_arr = replicate(nspec_total/nsets, nsets)
-nmod = nspec_total mod nsets
-npts_arr[0] = npts_arr[0] + nmod
-
-set_str = ml_partition_data(param_arr, npts_arr, /span)
-
-train_idx = set_str.(0)
-ntrain = n_elements(train_idx) 
-cross_idx = set_str.(1)
-ncross = n_elements(cross_idx) 
+spec_idx_full = lindgen(nspec_total)
 
 ;;;;;;;;;;;;;;;;;;;;
 ;;; TRAIN THE CANNON
@@ -402,216 +395,316 @@ ncross = n_elements(cross_idx)
 ; Normal wavelength: some masked - process normally. individual pixel
 ;                                  should have high uncertainty
 
-; Make design matrix
-teff_train = teff_ol[train_idx]
-vsini_train = vsini_ol[train_idx]
-feh_train = feh_ol[train_idx]
-logg_train = logg_ol[train_idx]
+; FIXME : stuff copied here that I can't skip in the debug step
+    ; Using all pixel masks for now
+    mask_bits = lindgen(15)
+    mask_dec = long(total(2L^mask_bits))
+    label_set_idx = where(label_settings eq 1)
 
-teff_label = teff_train - mean(teff_train)
-vsini_label = vsini_train - mean(vsini_train)
-feh_label = feh_train - mean(feh_train)
-logg_label = logg_train - mean(logg_train)
+;goto, debug
 
-constant = replicate(1d0, ntrain)
+for iter = 0, nspec_total-1 do begin
 
-; Contruct full design matrix
-
-full_matrix_transpose = [[constant],[teff_label],$
-                         [feh_label],[logg_label],[vsini_label]]
-
-label_set_idx = where(label_settings eq 1)
-
-linear_matrix_transpose = full_matrix_transpose[*,[0,label_set_idx+1]]
-
-
-; Add quadratic terms, if necessary
-if model_settings[1] eq 1 then begin
-    ; Initialize some stuff for making the quadratic terms
-    quad_matrix_transpose = []
+    ; Shift the index matrix by iter entries
+    spec_idx_shift = shift(spec_idx_full, iter)
     
-    ; Loop through to make quadratic terms
-    for label_idx = 1, nlabels_set do begin
-        
-        label_i = full_matrix_transpose[*,label_idx]
-        
-        label_others = full_matrix_transpose[*,label_idx:nlabels_set]
-        
-        quad_term = rebin(label_i, size(label_others, /dim)) * label_others
-        
-        quad_matrix_transpose = [[quad_matrix_transpose],[quad_term]]
-                
-    endfor
+    ; 0th entry is the cross-val index, the rest are training
+    cross_idx = spec_idx_shift[0]
+    train_idx = spec_idx_shift[1:*]
 
-    design_matrix_transpose = [[linear_matrix_transpose], [quad_matrix_transpose]]
-
-endif else if model_settings[0] eq 1 then begin
-
-    ; linear case
-    design_matrix_transpose = linear_matrix_transpose
-
-endif else message, "Model incorrectly specified"
     
-design_matrix = transpose(design_matrix_transpose)
+    ; Make design matrix
+    teff_train = teff_ol[train_idx]
+    vsini_train = vsini_ol[train_idx]
+    feh_train = feh_ol[train_idx]
+    logg_train = logg_ol[train_idx]
+    
+    teff_label = teff_train - mean(teff_train)
+    vsini_label = vsini_train - mean(vsini_train)
+    feh_label = feh_train - mean(feh_train)
+    logg_label = logg_train - mean(logg_train)
+    
+    constant = replicate(1d0, ntrain)
+    
+    ; Contruct full design matrix
+    
+    full_matrix_transpose = [[constant],[teff_label],$
+                             [feh_label],[logg_label],[vsini_label]]
+    
+    label_set_idx = where(label_settings eq 1)
+    
+    linear_matrix_transpose = full_matrix_transpose[*,[0,label_set_idx+1]]
+    
+    
+    ; Add quadratic terms, if necessary
+    if model_settings[1] eq 1 then begin
+        ; Initialize some stuff for making the quadratic terms
+        quad_matrix_transpose = []
+        
+        ; Loop through to make quadratic terms
+        for label_idx = 1, nlabels_set do begin
+            
+            label_i = full_matrix_transpose[*,label_idx]
+            
+            label_others = full_matrix_transpose[*,label_idx:nlabels_set]
+            
+            quad_term = rebin(label_i, size(label_others, /dim)) * label_others
+            
+            quad_matrix_transpose = [[quad_matrix_transpose],[quad_term]]
+            
+        endfor
+        
+        design_matrix_transpose = [[linear_matrix_transpose], [quad_matrix_transpose]]
+        
+    endif else if model_settings[0] eq 1 then begin
+        
+        ; linear case
+        design_matrix_transpose = linear_matrix_transpose
+        
+    endif else message, "Model incorrectly specified"
+    
+    design_matrix = transpose(design_matrix_transpose)
+    
+    ; no constant column for input to regress function
+    label_matrix = design_matrix[1:*,*]
+    
+    nparam = n_elements(design_matrix[*,0]) 
+    nlabel_columns = n_elements(label_matrix[*,0]) 
+    
+    
+    ; Data
+    flux_data = spectra_ol[*,train_idx]
+    err_data = error_ol[*,train_idx]
+    mask_data = mask_ol[*,train_idx]
+    
+    ; Using all pixel masks for now
+    mask_bits = lindgen(15)
+    mask_dec = long(total(2L^mask_bits))
+    
+    
+    if skip_opt then goto, skip_training
+    
+    ;;; Begin loop through pixels
+    ; Initialize
+    lambda_mask = bytarr(npix)
+    theta_arr = dblarr(nparam, npix) 
+    scatter_vec = dblarr(npix)
+    
+    for pixnum = 0L, npix-1 do begin
+        
+        ; Check if it's the interchip region, or spectacularly bad
+        col_mask_dec = reform(mask_data[pixnum,*])
+        col_mask_bin = ((mask_dec and col_mask_dec) < 1) ;Set all masked pixels to 1
+        
+        col_mask_idx = where(col_mask_bin eq 1, n_masked, comp=gd_idx, ncomp=ngood)
+        
+        if n_masked ge (floor(0.9*ntrain)) then begin
+            ; This pixel is either interchip, or just terrible
+            
+            print, strtrim(pixnum,2)+" is Bad Pixel, moving on to "+strtrim(pixnum+1,2)
+            ; Set scatter to max (don't know what max is yet)
+            ; Let's instead flag the pixel
+            lambda_mask[pixnum] = 1B
+            scatter_vec[pixnum] = !values.d_nan
+            
+            ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
+            ;theta_arr[*,pixnum] = [1d0,0d0,0d0]
+            theta_arr[*,pixnum] = replicate(0d0, nparam)
+            
+            continue
+        endif
 
-; no constant column for input to regress function
-label_matrix = design_matrix[1:*,*]
-
-nparam = n_elements(design_matrix[*,0]) 
-nlabel_columns = n_elements(label_matrix[*,0]) 
-
-
-; Data
-flux_data = spectra_ol[*,train_idx]
-err_data = error_ol[*,train_idx]
-mask_data = mask_ol[*,train_idx]
-
-; Using all pixel masks for now
-mask_bits = lindgen(15)
-mask_dec = long(total(2L^mask_bits))
-
-
-if skip_opt then goto, skip_training
-
-;;; Begin loop through pixels
-; Initialize
-lambda_mask = bytarr(npix)
-theta_arr = dblarr(nparam, npix) 
-scatter_vec = dblarr(npix)
-
-for pixnum = 0L, npix-1 do begin
-
-    ; Check if it's the interchip region, or spectacularly bad
-    col_mask_dec = reform(mask_data[pixnum,*])
-    col_mask_bin = ((mask_dec and col_mask_dec) < 1) ;Set all masked pixels to 1
-
-    col_mask_idx = where(col_mask_bin eq 1, n_masked, comp=gd_idx, ncomp=ngood)
-
-    if n_masked ge (floor(0.95*ntrain)) then begin
-        ; This pixel is either interchip, or just terrible
-                
-        print, strtrim(pixnum,2)+" is Bad Pixel, moving on to "+strtrim(pixnum+1,2)
-        ; Set scatter to max (don't know what max is yet)
-        ; Let's instead flag the pixel
-        lambda_mask[pixnum] = 1B
-        scatter_vec[pixnum] = !values.d_nan
-
-        ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
-        ;theta_arr[*,pixnum] = [1d0,0d0,0d0]
-        theta_arr[*,pixnum] = replicate(0d0, nparam)
-
-        continue
-    endif
-
+        
+        
     ;;; Set up amoeba
-    ; We are optimizing for theta and s(catter). Actually, just s, at
-    ; the amoeba level, I think. At each s, theta is determined by
-    ; linear algebra (we can use regress, I think). So we need the
-    ; amoeba function to return s, and preferably theta, though we
-    ; could just call it with the optimized s to get theta
-
-    
-    flux = reform(flux_data[pixnum,*])
-    e_flux = reform(err_data[pixnum,*])
-    
-    ; Set flagged pixel error high
-    e_flux[col_mask_idx] = 1d8
-
-    ftol = 1d-5
-
-    guess = [median(e_flux^2)]  
-    scale = guess
-
-    if vis then begin
-        window, 0, xs=1400, ys=900, $
-          title="Training at Pixel #: "+strtrim(pixnum,2)
-        ;!p.multi = [0,1,3]
-    endif
-
-    scatter_lambda = amoeba3(ftol, function_name='training_step', p0=guess, $
-                             scale=scale, function_value=fval, $
-                             nmax=nmax, ncalls=ncalls)
-    
-    if vis then !p.multi = 0
-    
-    ; Test to see if result converged
-    if scatter_lambda[0] eq -1 then begin
+        ; We are optimizing for theta and s(catter). Actually, just s, at
+        ; the amoeba level, I think. At each s, theta is determined by
+        ; linear algebra (we can use regress, I think). So we need the
+        ; amoeba function to return s, and preferably theta, though we
+        ; could just call it with the optimized s to get theta
         
-        ; Mask the pixel
-        lambda_mask[pixnum] = 2B
-        scatter_vec[pixnum] = !values.d_nan
-
-        ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
-        theta_arr[*,pixnum] = replicate(0d0, nparam)
-
-        print, pixnum, format='("WARNING: AMOEBA failed at pixel ",I)'
-        print, ''
-                
         
-    endif else begin
-
-        ; Mark pixel as good
-        lambda_mask[pixnum] = 0B
-
-        ; Store optimized scatter value
-        scatter_i = abs(scatter_lambda[0])
-        scatter_vec[pixnum] = scatter_i
-
-        ; Get theta_lambda by calling the function once more
+        flux = reform(flux_data[pixnum,*])
+        e_flux = reform(err_data[pixnum,*])
+        
+        ; Set flagged pixel error high
+        e_flux[col_mask_idx] = 1d8
+        
+        ftol = 1d-5
+        
+        guess = [median(e_flux^2)]  
+        scale = guess
+        
         if vis then begin
-            vis = 0
-            null_var = training_step(scatter_lambda)
-            vis = 1
-        endif else null_var = training_step(scatter_lambda)
+            window, 0, xs=1400, ys=900, $
+              title="Training at Pixel #: "+strtrim(pixnum,2)
+            ;!p.multi = [0,1,3]
+        endif
         
-        theta_arr[*,pixnum] = theta_lambda
-
-    endelse
-
-    if ~keyword_set(visualize) then vis = 0
-
-    if pixnum eq 300 or pixnum eq 350 then begin
+        scatter_lambda = amoeba3(ftol, function_name='training_step', p0=guess, $
+                                 scale=scale, function_value=fval, $
+                                 nmax=nmax, ncalls=ncalls)
         
-        help, theta_arr
-        help, scatter_vec
-        help, lambda_mask
+        if vis then !p.multi = 0
         
-        ;vis = 1
+        ; Test to see if result converged
+        if scatter_lambda[0] eq -1 then begin
+            
+            ; Mask the pixel
+            lambda_mask[pixnum] = 2B
+            scatter_vec[pixnum] = !values.d_nan
+            
+            ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
+            theta_arr[*,pixnum] = replicate(0d0, nparam)
+            
+            print, pixnum, format='("WARNING: AMOEBA failed at pixel ",I)'
+            print, ''
+            
+            
+        endif else begin
+            
+            ; Mark pixel as good
+            lambda_mask[pixnum] = 0B
+            
+            ; Store optimized scatter value
+            scatter_i = abs(scatter_lambda[0])
+            scatter_vec[pixnum] = scatter_i
+            
+            ; Get theta_lambda by calling the function once more
+            if vis then begin
+                vis = 0
+                null_var = training_step(scatter_lambda)
+                vis = 1
+            endif else null_var = training_step(scatter_lambda)
+            
+            theta_arr[*,pixnum] = theta_lambda
+            
+        endelse
+        
+        if ~keyword_set(visualize) then vis = 0
+        
+        if pixnum eq 300 or pixnum eq 350 then begin
+            
+            help, theta_arr
+            help, scatter_vec
+            help, lambda_mask
+            
+            ;vis = 1
+            
+            ;stop
+        endif
+        
+    endfor
+    
+    print, max(scatter_vec, /nan), format='("Maximum scatter is: ",D0)'
+    
+    ; Set bad pixels to twice maximum scatter
+    
+    bad_idx = where(lambda_mask ne 0, nbad)
+    
+    if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 2d0
+    
+    outstr = {training_idx:train_idx, $
+              cross_idx:cross_idx, $
+              lambda_mask:lambda_mask, $
+              scatter_vec:scatter_vec, $
+              theta_arr:theta_arr}
+    
+    if iter eq 0 then outstr_loo = replicate(outstr, nspec_total) $
+    else outstr_loo[iter] = outstr
 
-        ;stop
+    print, "Finished for iteration number: "+ $
+      strtrim(iter+1,2)+"/"+strtrim(nspec_total,2)
+    
+    print, ''
+    
+    print, "Continue to write structure to disk"
+    
+    print, "outfile = "+outfile
+    print, "test_number = "+test_number
+    print, ""
+    
+    ; Write results, as we go
+    if iter eq 0 then begin
+        mwrfits, outstr, outfile, /create
+    endif else mwrfits, outstr, outfile
+    
+    ; Write to log file, and overwrite results with full results, if finished
+    if iter eq nspec_total-1 then begin
+
+        ; Overwrite with array of structures
+        mwrfits, outstr_loo, outfile, /create
+        
+        ; Log
+        openw, lun, log_file, /get_lun, /append
+    
+        training_done_string = strjoin([test_number,description,'1','0'], '|')
+        
+        printf, lun, training_done_string
+        free_lun, lun
+    endif
+    
+endfor
+
+;debug:
+outstr_loo = mrdfits(outfile, 1)
+
+
+; Get median for all params and pixels
+theta_arr_loo = outstr_loo.theta_arr
+lambda_mask_loo = outstr_loo.lambda_mask
+scatter_vec_loo = outstr_loo.scatter_vec
+
+help, theta_arr_loo
+help, lambda_mask_loo
+help, scatter_vec_loo
+
+
+; Nan bad ones
+for pixnum = 0, npix-1 do begin
+
+    mask_spec = where(reform(lambda_mask_loo[pixnum,*]) ne 0, nmask, comp=gspec)
+
+    if nmask gt 0 then begin
+
+        lambda_mask_loo[pixnum,*] = 1B
+        scatter_vec_loo[pixnum,*] = !values.d_nan
+        theta_arr_loo[*,pixnum,*] = !values.d_nan
+
     endif
 
 endfor
 
-print, max(scatter_vec, /nan), format='("Maximum scatter is: ",F0)'
+theta_arr_median = median(theta_arr_loo, dim=3)
+scatter_vec_median = median(scatter_vec_loo, dim=2)
+max_scatter = max(scatter_vec_median, /nan)
 
-; Set bad pixels to twice maximum scatter
+lambda_mask_idx = where((~finite(scatter_vec_median)) or (~finite(theta_arr_median[0,*])), nmask, comp=good_idx)
+lambda_mask_final = replicate(0B, npix)
 
-bad_idx = where(lambda_mask ne 0, nbad)
 
-if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 2d0
+if nmask ne 0 then begin
+    
+    theta_arr_median[*,lambda_mask_idx] = 0d0
+    scatter_vec_median[lambda_mask_idx] = max_scatter * 2d0
+    lambda_mask_final[lambda_mask_idx] = 1B
 
-outstr = {lambda_mask:lambda_mask, scatter_vec:scatter_vec, theta_arr:theta_arr}
+endif
 
-print, "Finished"
+theta_arr_final = theta_arr_median
+scatter_vec_final = scatter_vec_median
 
-print, ''
 
-print, "Continue to write structure to disk"
 
-print, "outfile = "+outfile
-print, "test_number = "+test_number
-print, ""
 
-; Write results
-mwrfits, outstr, outfile, /create
+; Write it all
+med_outstr = {lambda_mask:lambda_mask_final, $
+              scatter_vec:scatter_vec_final, $
+              theta_arr:theta_arr_final}
+    
+mwrfits, med_outstr, median_outfile, /create
 
-openw, lun, log_file, /get_lun, /append
 
-training_done_string = strjoin([test_number,description,'1','0'], '|')
-
-printf, lun, training_done_string
-free_lun, lun
 
 
 skip_training:
@@ -620,17 +713,30 @@ skip_training:
 ; Using the theta and scatter, we optimize the labels for each
 ; spectrum.
 
-if skip_opt then begin
-    training_str = mrdfits(outfile,1)
+;if skip_opt then begin
+    training_str = mrdfits(median_outfile,1)
     lambda_mask = training_str.lambda_mask
     scatter_vec = training_str.scatter_vec
     theta_arr = training_str.theta_arr
-endif
+;endif
 
-data_cross = spectra_ol[*,cross_idx]
-err_data_cross = error_ol[*,cross_idx]
-mask_data_cross = mask_ol[*,cross_idx]
+; data_cross = spectra_ol[*,cross_idx]
+; err_data_cross = error_ol[*,cross_idx]
+; mask_data_cross = mask_ol[*,cross_idx]
+data_cross = spectra_ol
+err_data_cross = error_ol
+mask_data_cross = mask_ol
 
+
+
+
+;FIXME (this is true, but inflexible)
+ncross = nspec_total
+cross_idx = lindgen(nspec_total)
+teff_train = teff_ol
+feh_train = feh_ol
+logg_train = logg_ol
+vsini_train = vsini_ol
 
 ;;; Begin loop through spectra
 ; Initialize
@@ -791,6 +897,8 @@ plotfile = plotdir + 'cannon_rot_test_'+test_number+'.eps'
 
 !p.multi = [0,nlabels_set, nlabels_set]
 
+loadct, 35
+
 psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
 ;window, 0, xs = 1600, ys=900
 
@@ -843,7 +951,7 @@ for lab_i = 0, nlabels_tot - 1 do begin
 ;                                 magnitude=mag_vec)
         
 ;         rline_teff = plot(teff_plot.xrange, [0,0], /overplot, /thick)
-        sg_scatter_plot, teff_cross, res_teff, sqrt(test_e_teff^2 + 70d0^2), $
+        sg_scatter_plot, teff_cross, res_teff, sqrt(test_e_teff^2), $
           colors=bytscl(mag_vec), xtit=textoidl('T_{eff} (CKS)'), $
           ytit=textoidl('\Delta T_{eff}')
         oplot, minmax(teff_cross), replicate(0d0, 2), linest=2, /thick
