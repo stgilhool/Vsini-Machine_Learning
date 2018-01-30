@@ -60,6 +60,22 @@
 ;-
 
 ;;;;;;;;;;;;;;;;;;;;
+;;; Custom Scatter plot function
+
+pro sg_scatter_plot, x, y, error, COLORS=colors, _EXTRA=ex
+
+plot, x, y, ps=8, _extra=ex, /nodata
+
+foreach color_i, colors, co_idx do begin
+
+    oplot, [x[co_idx]], [y[co_idx]], color=color_i, ps=8
+    oploterror, [x[co_idx]], [y[co_idx]], [error[co_idx]], ps=8, errcolor=color_i
+
+endforeach
+
+end
+
+;;;;;;;;;;;;;;;;;;;;
 ; Function called by amoeba to optimize labels for test spectra
 
 function test_step, params
@@ -769,6 +785,15 @@ vsini_cross = vsini_ol[cross_idx]
 test_vsini = reform(test_label_results[1,*]) + mean(vsini_train)
 test_e_vsini = reform(test_label_errors[1,*])
 
+
+nd_true_idx = where(vsini_cross le 5, nndtrue)
+nd_fit_true_idx = where(test_vsini[nd_true_idx] le 5, nndfittrue, comp=nd_fit_false_idx, ncomp=nndfitfalse)
+
+nsuccess = double(nndfittrue)/double(nndtrue)
+
+contamination = double(nndfitfalse)/(double(nndfittrue)+double(nndfitfalse))
+
+
 if nlabels_set ge 3 then begin
 ;Feh
 feh_cross = feh_ol[cross_idx]
@@ -784,32 +809,53 @@ test_logg = reform(test_label_results[3,*]) + mean(logg_train)
 test_e_logg = reform(test_label_errors[3,*])
 endif
 
-
-; Mark failed guys in red
-failed_idx = where(test_status_vec ne 0, nfail_test)
-
-
-;window, 1, tit="RESULTS!!!", xs=1500, ys=900
 plotdir = '/home/stgilhool/Vsini_ML/cannon_test/plots_cannon_test/'
 plotfile = plotdir + 'cannon_test_'+test_number+'.eps'
+;loadct, 34
 psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
 
-!p.multi = [0,1,2]
+!p.multi = [0,4,4]
 
-plot, vsini_cross, test_vsini, ps=8, $
-  tit="Quadratic in "+strtrim(nlabels_set,2)+" labels", $
-  xtit="Vsini (CKS)", ytit="Vsini (Cannon Derivative)", charsize=1.5
-oplot, [-100,100], [-100,100], linest=2, /thick
-oploterror, vsini_cross, test_vsini, test_e_vsini, ps=8
-if nfail_test gt 0 then oploterror, vsini_cross[failed_idx], $
-  test_vsini[failed_idx], test_e_vsini[failed_idx], ps=8, co=!red, errcolor=!red
+for label_num = 0, 3 do begin
+    
+    case label_num of
+        
+        0: mag_vec = vsini_cross
+        1: mag_vec = teff_cross
+        2: mag_vec = feh_cross
+        3: mag_vec = logg_cross
+        else: message, "Error with case statement"
+    endcase
 
+    ;; Vsini
+    sg_scatter_plot, vsini_cross, test_vsini-vsini_cross, test_e_vsini, xtit="Vsini (CKS)", ytit="Vsini (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+    
+    oplot, [-100,100], replicate(0d0,2), linest=2, /thick
+    
+    ;oplot, [-100,100], [-100,100], linest=2, /thick
+    ;oploterror, vsini_cross, test_vsini-vsini_cross, test_e_vsini, ps=8
+    ;if nfail_test gt 0 then oploterror, vsini_cross[failed_idx], $
+    ;test_vsini[failed_idx], test_e_vsini[failed_idx], ps=8, co=!red, errcolor=!red
+    
+    ;; Teff
+    sg_scatter_plot, teff_cross, test_teff-teff_cross, test_e_teff, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+    
+    oplot, [3000,9000], replicate(0d0,2), linest=2, /thick
+    
+    
+    ;; Feh
+    sg_scatter_plot, feh_cross, test_feh-feh_cross, test_e_feh, xtit="[Fe/H] (CKS)", ytit="[Fe/H] (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
 
-plot, teff_cross, test_teff, ps=8, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, /yno
-oplot, [-1d5, 1d5], [-1d5,1d5], linest=2, /thick
-oploterror, teff_cross, test_teff, test_e_teff, ps=8
-if nfail_test gt 0 then oploterror, teff_cross[failed_idx], $
-  test_teff[failed_idx], test_e_teff[failed_idx], ps=8, co=!red, errcolor=!red
+    oplot, [-3,3], replicate(0d0,2), linest=2, /thick
+
+    ;; Logg
+    sg_scatter_plot, logg_cross, test_logg-logg_cross, test_e_logg, xtit="Logg (CKS)", ytit="Logg (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+
+    oplot, [2,7], replicate(0d0,2), linest=2, /thick
+
+endfor
+
+xyouts, 0.5, 0.95, "Vsini Non-detection Contamination = "+strtrim(sigfig(contamination,3),2),/alignment, /normal
 
 psclose
 
@@ -834,3 +880,30 @@ free_lun, lun
 
 
 end
+
+
+; Mark failed guys in red
+; failed_idx = where(test_status_vec ne 0, nfail_test)
+
+
+; ;window, 1, tit="RESULTS!!!", xs=1500, ys=900
+; plotdir = '/home/stgilhool/Vsini_ML/cannon_test/plots_cannon_test/'
+; plotfile = plotdir + 'cannon_test_'+test_number+'.eps'
+; psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
+
+; !p.multi = [0,1,2]
+
+; plot, vsini_cross, test_vsini, ps=8, $
+;   tit="Quadratic in "+strtrim(nlabels_set,2)+" labels", $
+;   xtit="Vsini (CKS)", ytit="Vsini (Cannon Derivative)", charsize=1.5
+; oplot, [-100,100], [-100,100], linest=2, /thick
+; oploterror, vsini_cross, test_vsini, test_e_vsini, ps=8
+; if nfail_test gt 0 then oploterror, vsini_cross[failed_idx], $
+;   test_vsini[failed_idx], test_e_vsini[failed_idx], ps=8, co=!red, errcolor=!red
+
+
+; plot, teff_cross, test_teff, ps=8, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, /yno
+; oplot, [-1d5, 1d5], [-1d5,1d5], linest=2, /thick
+; oploterror, teff_cross, test_teff, test_e_teff, ps=8
+; if nfail_test gt 0 then oploterror, teff_cross[failed_idx], $
+;   test_teff[failed_idx], test_e_teff[failed_idx], ps=8, co=!red, errcolor=!red
