@@ -400,6 +400,11 @@ ntrain = n_elements(train_idx)
 cross_idx = set_str.(1)
 ncross = n_elements(cross_idx) 
 
+
+train_idx = lindgen(nspec_total)
+cross_idx = lindgen(nspec_total)
+ntrain = nspec_total
+ncross = nspec_total
 ;;;;;;;;;;;;;;;;;;;;
 ;;; TRAIN THE MORTAR
 ;;;;;;;;;;;;;;;;;;;;
