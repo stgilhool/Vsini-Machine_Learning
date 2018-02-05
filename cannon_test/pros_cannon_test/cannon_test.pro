@@ -148,7 +148,7 @@ pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=description
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-nlabels_set = 4
+nlabels_set = 2
 
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
@@ -291,7 +291,10 @@ logg_ol = odata.logg_cks
 
 ; Smooth that shit, WITH ERRORS!
 smooth_err = []
-error_temp = (error_ol < 10d0)
+error_temp = (error_ol < 1d0)
+mskidx = where(mask_ol ne 0)
+error_temp[mskidx] = 1d0
+spectra_ol[mskidx] = (spectra_ol[mskidx] < 1d0)
 smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, $
                                savgol_error=smooth_err)
 
@@ -326,10 +329,10 @@ cross_idx = set_str.(1)
 ncross = n_elements(cross_idx) 
 
 
-train_idx = lindgen(nspec_total)
-cross_idx = lindgen(nspec_total)
-ntrain = nspec_total
-ncross = nspec_total
+; train_idx = lindgen(nspec_total)
+; cross_idx = lindgen(nspec_total)
+; ntrain = nspec_total
+; ncross = nspec_total
 
 ;;;;;;;;;;;;;;;;;;;;
 ;;; TRAIN THE MORTAR
@@ -526,7 +529,7 @@ print, "outfile = "+outfile
 print, "test_number = "+test_number
 print, ""
 
-stop
+;stop
 
 mwrfits, outstr, outfile, /create
 
@@ -537,7 +540,7 @@ training_done_string = strjoin([test_number,description,'1','0'], '|')
 printf, lun, training_done_string
 free_lun, lun
 
-stop
+;stop
 
 skip_training:
 
@@ -656,9 +659,9 @@ plotfile = plotdir + 'cannon_test_'+test_number+'.eps'
 ;loadct, 34
 psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
 
-!p.multi = [0,4,4]
+!p.multi = [0,nlabels_set, nlabels_set]
 
-for label_num = 0, 3 do begin
+for label_num = 0, nlabels_set-1 do begin
     
     case label_num of
         
@@ -679,25 +682,30 @@ for label_num = 0, 3 do begin
     ;if nfail_test gt 0 then oploterror, vsini_cross[failed_idx], $
     ;test_vsini[failed_idx], test_e_vsini[failed_idx], ps=8, co=!red, errcolor=!red
     
-    ;; Teff
-    sg_scatter_plot, teff_cross, test_teff-teff_cross, test_e_teff, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+    if nlabels_set ge 2 then begin
+                                ;; Teff
+        sg_scatter_plot, teff_cross, test_teff-teff_cross, test_e_teff, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        
+        oplot, [3000,9000], replicate(0d0,2), linest=2, /thick
+    endif
     
-    oplot, [3000,9000], replicate(0d0,2), linest=2, /thick
+    if nlabels_set ge 3 then begin
+                                ;; Feh
+        sg_scatter_plot, feh_cross, test_feh-feh_cross, test_e_feh, xtit="[Fe/H] (CKS)", ytit="[Fe/H] (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        
+        oplot, [-3,3], replicate(0d0,2), linest=2, /thick
+    endif
     
+    if nlabels_set ge 4 then begin
+                                ;; Logg
+        sg_scatter_plot, logg_cross, test_logg-logg_cross, test_e_logg, xtit="Logg (CKS)", ytit="Logg (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        
+        oplot, [2,7], replicate(0d0,2), linest=2, /thick
+    endif
     
-    ;; Feh
-    sg_scatter_plot, feh_cross, test_feh-feh_cross, test_e_feh, xtit="[Fe/H] (CKS)", ytit="[Fe/H] (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
-
-    oplot, [-3,3], replicate(0d0,2), linest=2, /thick
-
-    ;; Logg
-    sg_scatter_plot, logg_cross, test_logg-logg_cross, test_e_logg, xtit="Logg (CKS)", ytit="Logg (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
-
-    oplot, [2,7], replicate(0d0,2), linest=2, /thick
-
 endfor
 
-xyouts, 0.5, 0.95, "Vsini Non-detection Contamination = "+strtrim(sigfig(contamination,3),2),/alignment, /device
+xyouts, 0.5, 0.95, "Vsini Non-detection Contamination = "+strtrim(sigfig(contamination,3),2),/alignment, /normal
 
 psclose
 
