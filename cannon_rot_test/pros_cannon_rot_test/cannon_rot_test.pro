@@ -59,21 +59,6 @@
 ;
 ;-
 
-pro sg_scatter_plot, x, y, error, COLORS=colors, _EXTRA=ex
-
-plot, x, y, ps=8, _extra=ex, /nodata
-
-foreach color_i, colors, co_idx do begin
-
-    oplot, [x[co_idx]], [y[co_idx]], color=color_i, ps=8
-    oploterror, [x[co_idx]], [y[co_idx]], [error[co_idx]], ps=8, errcolor=color_i
-
-endforeach
-
-end
-
-
-
 ;;;;;;;;;;;;;;;;;;;;
 ; Function called by amoeba to optimize labels for test spectra
 
