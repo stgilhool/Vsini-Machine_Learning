@@ -60,22 +60,6 @@
 ;-
 
 ;;;;;;;;;;;;;;;;;;;;
-;;; Custom Scatter plot function
-
-pro sg_scatter_plot, x, y, error, COLORS=colors, _EXTRA=ex
-
-plot, x, y, ps=8, _extra=ex, /nodata
-
-foreach color_i, colors, co_idx do begin
-
-    oplot, [x[co_idx]], [y[co_idx]], color=color_i, ps=8
-    oploterror, [x[co_idx]], [y[co_idx]], [error[co_idx]], ps=8, errcolor=color_i
-
-endforeach
-
-end
-
-;;;;;;;;;;;;;;;;;;;;
 ; Function called by amoeba to optimize s^2 (and consequenty theta)
 
 function training_step, params
@@ -148,7 +132,7 @@ pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=description
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-nlabels_set = 2
+nlabels_set = 3
 
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
@@ -673,7 +657,7 @@ for label_num = 0, nlabels_set-1 do begin
     endcase
 
     ;; Vsini
-    sg_scatter_plot, vsini_cross, test_vsini-vsini_cross, test_e_vsini, xtit="Vsini (CKS)", ytit="Vsini (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+    sg_scatter_plot, vsini_cross, test_vsini-vsini_cross, test_e_vsini, xtit="Vsini (CKS)", ytit="Vsini (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec, top=255-12)
     
     oplot, [-100,100], replicate(0d0,2), linest=2, /thick
     
@@ -684,21 +668,21 @@ for label_num = 0, nlabels_set-1 do begin
     
     if nlabels_set ge 2 then begin
                                 ;; Teff
-        sg_scatter_plot, teff_cross, test_teff-teff_cross, test_e_teff, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        sg_scatter_plot, teff_cross, test_teff-teff_cross, test_e_teff, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec, top=255-12)
         
         oplot, [3000,9000], replicate(0d0,2), linest=2, /thick
     endif
     
     if nlabels_set ge 3 then begin
                                 ;; Feh
-        sg_scatter_plot, feh_cross, test_feh-feh_cross, test_e_feh, xtit="[Fe/H] (CKS)", ytit="[Fe/H] (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        sg_scatter_plot, feh_cross, test_feh-feh_cross, test_e_feh, xtit="[Fe/H] (CKS)", ytit="[Fe/H] (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec, top=255-12)
         
         oplot, [-3,3], replicate(0d0,2), linest=2, /thick
     endif
     
     if nlabels_set ge 4 then begin
                                 ;; Logg
-        sg_scatter_plot, logg_cross, test_logg-logg_cross, test_e_logg, xtit="Logg (CKS)", ytit="Logg (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        sg_scatter_plot, logg_cross, test_logg-logg_cross, test_e_logg, xtit="Logg (CKS)", ytit="Logg (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec, top=255-12)
         
         oplot, [2,7], replicate(0d0,2), linest=2, /thick
     endif
