@@ -98,7 +98,7 @@ chi2_per_dof = chi2/dof
 chi2_diff = abs(chi2_per_dof - 1d0)
 
 ; penalize chi2 if bad regression
-if rstatus ne 0 then chi2_diff = chi2_diff * 1.5
+if rstatus ne 0 then chi2_diff = chi2_diff * 10.
 
 if vis eq 1 then begin
 
@@ -132,7 +132,7 @@ pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=description
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-nlabels_set = 3
+nlabels_set = 4
 
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
@@ -279,7 +279,7 @@ error_temp = (error_ol < 1d0)
 mskidx = where(mask_ol ne 0)
 error_temp[mskidx] = 1d0
 spectra_ol[mskidx] = (spectra_ol[mskidx] < 1d0)
-smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, $
+smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, degree=4, $
                                savgol_error=smooth_err)
 
 nspec_total = n_elements(odata) 
@@ -419,9 +419,10 @@ for pixnum = 0L, npix-1 do begin
     dflux = reform(slope_data[pixnum,*])
     e_dflux = reform(err_data[pixnum,*])
     
-    ftol = 1d-5
+    ftol = 1d-8
 
-    guess = [mean(e_dflux^2, /nan)]  
+    ;guess = [mean(e_dflux^2, /nan)]  
+    guess = [1d5]  
     scale = guess
 
     if vis then begin
@@ -455,49 +456,85 @@ for pixnum = 0L, npix-1 do begin
 ;         print, ''
         
         
+
         
     endif else begin
 
-        ; Mark pixel as good
-        lambda_mask[pixnum] = 0B
-
+        
         ; Store optimized scatter value
         scatter_i = abs(scatter_lambda[0])
-        scatter_vec[pixnum] = scatter_i
-
+        
         ; Get theta_lambda by calling the function once more
         if vis then begin
             vis = 0
-            null_var = training_step(scatter_lambda)
+            null_var = training_step(scatter_i)
             vis = 1
-        endif else null_var = training_step(scatter_lambda)
-        
-        theta_arr[*,pixnum] = theta_lambda
+        endif else null_var = training_step(scatter_i)
 
+        if scatter_i eq 0 then begin
+
+            lambda_mask[pixnum] = 3B
+            scatter_vec[pixnum] = !values.d_nan
+            theta_arr[*,pixnum] = replicate(0d0, nparam)
+
+            print, pixnum, format='("WARNING: Scatter is 0 at pixel ",I)'
+            print, ''
+        ;     y_min = min(dflux-e_dflux)
+;             y_max = max(dflux+e_dflux)
+;             plot, vsini_train, dflux, ps=8, tit="SCATTER = 0!!! | Pixel: "+strtrim(pixnum,2), yr=[y_min, y_max]
+;             oploterror, vsini_train, dflux, e_dflux, ps=8, co=!red
+
+;             dxstop
+;             dummy=0
+
+        endif else if total(finite(theta_lambda)) ne nparam then begin
+
+            lambda_mask[pixnum] = 4B
+            scatter_vec[pixnum] = !values.d_nan
+            theta_arr[*,pixnum] = replicate(0d0, nparam)
+
+            print, pixnum, format='("WARNING: parameters undefined at pixel ",I)'
+            print, ''
+            wait, 2
+
+        endif else begin
+            ; y_min = min(dflux-e_dflux)
+;             y_max = max(dflux+e_dflux)
+;             plot, vsini_train, dflux, ps=8, tit="scatter = "+strtrim(long(scatter_i),2)+" | Pixel: "+strtrim(pixnum,2), yr=[y_min, y_max]
+;             oploterror, vsini_train, dflux, e_dflux, ps=8
+
+;             dxstop
+;             dummy=0
+        ; Mark pixel as good
+            lambda_mask[pixnum] = 0B
+
+            scatter_vec[pixnum] = scatter_i
+            theta_arr[*,pixnum] = theta_lambda
+        endelse
     endelse
-
+    
     if ~keyword_set(visualize) then vis = 0
-
-    if pixnum eq 300 or pixnum eq 350 then begin
+    
+    ; if pixnum eq 300 or pixnum eq 350 then begin
         
-        help, theta_arr
-        help, scatter_vec
-        help, lambda_mask
+;         help, theta_arr
+;         help, scatter_vec
+;         help, lambda_mask
         
-        vis = 1
+;         vis = 1
 
-        ;stop
-    endif
+;         ;stop
+;     endif
 
 endfor
 
-print, max(scatter_vec, maxidx, /nan), format='("Maximum scatter is: ",F)'
+print, max(scatter_vec, maxidx, /nan), format='("Maximum scatter is: ",F0)'
 
 ; Set bad pixels to twice maximum scatter
 
 bad_idx = where(lambda_mask ne 0, nbad)
 
-if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 2d0
+if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 100d0
 
 outstr = {lambda_mask:lambda_mask, scatter_vec:scatter_vec, theta_arr:theta_arr}
 
@@ -642,6 +679,8 @@ plotdir = '/home/stgilhool/Vsini_ML/cannon_test/plots_cannon_test/'
 plotfile = plotdir + 'cannon_test_'+test_number+'.eps'
 ;loadct, 34
 psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
+setcolors, /system_var, /color, /silent
+!p.color = !black
 
 !p.multi = [0,nlabels_set, nlabels_set]
 
@@ -692,7 +731,8 @@ endfor
 xyouts, 0.5, 0.95, "Vsini Non-detection Contamination = "+strtrim(sigfig(contamination,3),2),/alignment, /normal
 
 psclose
-
+setcolors, /system_var, /color, /silent
+!p.background=!black
 ; Write to the log file that the plot is made
 openw, lun, log_file, /get_lun, /append
 
