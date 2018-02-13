@@ -132,7 +132,7 @@ pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=description
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-nlabels_set = 1
+nlabels_set = 3
 
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
@@ -244,7 +244,7 @@ vsini_ol_cks = overlaps_data.vsini_cks
 ; Taking just the CKS labels for this test
 
 ;sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
-sel_idx_ol = where(vsini_ol_cks le 15 and vsini_ol_cks ge 1, $
+sel_idx_ol = where(vsini_ol_cks le 50 and vsini_ol_cks ge 1, $
                    nsel_ol)
 
 odata = overlaps_data[sel_idx_ol]
@@ -276,9 +276,10 @@ logg_ol = odata.logg_cks
 
 ; Smooth that shit, WITH ERRORS!
 smooth_err = []
-error_temp = (error_ol < 1d0)
+max_flux_error = 10d0
+error_temp = (error_ol < max_flux_error)
 mskidx = where(mask_ol ne 0)
-error_temp[mskidx] = 1d0
+error_temp[mskidx] = max_flux_error
 spectra_ol[mskidx] = (spectra_ol[mskidx] < 1d0)
 smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, degree=4, $
                                savgol_error=smooth_err)
