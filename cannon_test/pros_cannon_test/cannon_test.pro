@@ -103,9 +103,9 @@ if rstatus ne 0 then chi2_diff = chi2_diff * 10.
 if vis eq 1 then begin
 
     ; Sort the data by Vsini for visualization
-    vsini = reform(label_matrix[1,*])
+    vsini = reform(label_matrix[0,*])
     ; Sort the data by Teff for visualization
-    teff = reform(label_matrix[0,*])
+    teff = reform(label_matrix[1,*])
 
     plot, vsini, dflux, ps=8, symsize=0.5, xs=2, ys=2, xtit="Vsini", ytit="dF/dWL"
     oplot, vsini, model_dflux, ps=8, symsize=0.5, co=!red
@@ -132,7 +132,7 @@ pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=description
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-nlabels_set = 4
+nlabels_set = 1
 
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
@@ -243,7 +243,8 @@ vsini_ol_cks = overlaps_data.vsini_cks
 
 ; Taking just the CKS labels for this test
 
-sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
+;sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
+sel_idx_ol = where(vsini_ol_cks le 15 and vsini_ol_cks ge 1, $
                    nsel_ol)
 
 odata = overlaps_data[sel_idx_ol]
@@ -350,7 +351,7 @@ logg_label = logg_train - mean(logg_train)
 constant = replicate(1d0, ntrain)
 
 ; Full design matrix
-design_matrix = [transpose(constant), transpose(teff_label), transpose(vsini_label), transpose(feh_label), transpose(logg_label)]
+design_matrix = [transpose(constant), transpose(vsini_label), transpose(teff_label), transpose(feh_label), transpose(logg_label)]
 
 ; Reduce design matrix labels?
 
@@ -637,15 +638,16 @@ endfor
 
 
 ;Teff
+if nlabels ge 2 then begin
 teff_cross = teff_ol[cross_idx]
-test_teff = reform(test_label_results[0,*]) + mean(teff_train)
-test_e_teff = reform(test_label_errors[0,*])
-
+test_teff = reform(test_label_results[1,*]) + mean(teff_train)
+test_e_teff = reform(test_label_errors[1,*])
+endif
 
 ;Vsini
 vsini_cross = vsini_ol[cross_idx]
-test_vsini = reform(test_label_results[1,*]) + mean(vsini_train)
-test_e_vsini = reform(test_label_errors[1,*])
+test_vsini = reform(test_label_results[0,*]) + mean(vsini_train)
+test_e_vsini = reform(test_label_errors[0,*])
 
 nd_true_idx = where(vsini_cross le 5, nndtrue)
 nd_fit_true_idx = where(test_vsini[nd_true_idx] le 5, nndfittrue, comp=nd_fit_false_idx, ncomp=nndfitfalse)
