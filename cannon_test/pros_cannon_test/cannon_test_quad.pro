@@ -60,20 +60,6 @@
 ;-
 
 ;;;;;;;;;;;;;;;;;;;;
-;;; Custom Scatter plot function
-
-pro sg_scatter_plot, x, y, error, COLORS=colors, _EXTRA=ex
-
-plot, x, y, ps=8, _extra=ex, /nodata
-
-foreach color_i, colors, co_idx do begin
-
-    oplot, [x[co_idx]], [y[co_idx]], color=color_i, ps=8
-    oploterror, [x[co_idx]], [y[co_idx]], [error[co_idx]], ps=8, errcolor=color_i
-
-endforeach
-
-end
 
 ;;;;;;;;;;;;;;;;;;;;
 ; Function called by amoeba to optimize labels for test spectra
@@ -122,7 +108,13 @@ chi2_per_dof = chi2/dof
 
 chi2_diff = abs(chi2_per_dof - 1d0)
 
-
+; help, params
+; help, labels
+; help, model
+; help, test_data
+; help, residuals
+; help, chi2_per_dof
+; stop
 
 ; if vis eq 1 then begin
 
@@ -189,14 +181,14 @@ chi2_per_dof = chi2/dof
 chi2_diff = abs(chi2_per_dof - 1d0)
 
 ; penalize chi2 if bad regression
-if rstatus ne 0 then chi2_diff = chi2_diff * 1.5
+if rstatus ne 0 then chi2_diff = chi2_diff * 10.
 
 if vis eq 1 then begin
 
     ; Sort the data by Vsini for visualization
-    vsini = reform(label_matrix[1,*])
+    vsini = reform(label_matrix[0,*])
     ; Sort the data by Teff for visualization
-    teff = reform(label_matrix[0,*])
+    teff = reform(label_matrix[1,*])
 
     plot, vsini, dflux, ps=8, symsize=0.5, xs=2, ys=2, xtit="Vsini", ytit="dF/dWL"
     oplot, vsini, model_dflux, ps=8, symsize=0.5, co=!red
@@ -223,7 +215,7 @@ pro cannon_test_quad, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=descri
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-nlabels_set = 2
+nlabels_set = 1
 
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
@@ -334,7 +326,8 @@ vsini_ol_cks = overlaps_data.vsini_cks
 
 ; Taking just the CKS labels for this test
 
-sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
+;sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
+sel_idx_ol = where(vsini_ol_cks le 15 and vsini_ol_cks ge 1, $
                    nsel_ol)
 
 odata = overlaps_data[sel_idx_ol]
@@ -370,8 +363,8 @@ error_temp = (error_ol < 1d0)
 mskidx = where(mask_ol ne 0)
 error_temp[mskidx] = 1d0
 spectra_ol[mskidx] = (spectra_ol[mskidx] < 1d0)
-smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, $
-                                savgol_error=smooth_err)
+smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, degree=4, $
+                               savgol_error=smooth_err)
 
 nspec_total = n_elements(odata) 
 npix = n_elements(spectra_ol[*,0]) 
@@ -441,12 +434,12 @@ constant = replicate(1d0, ntrain)
 
 ; Full design matrix
 
-full_matrix_transpose = [[constant],[teff_label],$
-                         [vsini_label],[feh_label],[logg_label]]
+full_matrix_transpose = [[constant],[vsini_label],$
+                         [teff_label],[feh_label],[logg_label]]
 
 ; Initialize some stuff for making the quadratic terms
 quad_matrix_transpose = []
-label_string = ['Teff', 'Vsini', 'FeH', 'Logg']
+label_string = ['Vsini', 'Teff', 'FeH', 'Logg']
 
 ; Loop through to make quadratic terms
 for label_idx = 1, nlabels_set do begin
@@ -512,7 +505,7 @@ for pixnum = 0L, npix-1 do begin
 
     n_masked = total(col_mask_bin)
 
-    if n_masked ge (0.95*ntrain) then begin
+    if n_masked ge (0.9*ntrain) then begin
         ; This pixel is either interchip, or just terrible
         ; Set slope to 0, and err in slope to 1d8
         ; Or maybe just handle at regression step?
@@ -542,9 +535,10 @@ for pixnum = 0L, npix-1 do begin
     dflux = reform(slope_data[pixnum,*])
     e_dflux = reform(err_data[pixnum,*])
     
-    ftol = 1d-5
+    ftol = 1d-8
 
-    guess = [mean(e_dflux^2, /nan)]  
+    ;guess = [mean(e_dflux^2, /nan)]  
+    guess = [1d5]  
     scale = guess
 
     if vis then begin
@@ -581,46 +575,81 @@ for pixnum = 0L, npix-1 do begin
         
     endif else begin
 
-        ; Mark pixel as good
-        lambda_mask[pixnum] = 0B
-
+        
         ; Store optimized scatter value
         scatter_i = abs(scatter_lambda[0])
-        scatter_vec[pixnum] = scatter_i
-
+        
         ; Get theta_lambda by calling the function once more
         if vis then begin
             vis = 0
-            null_var = training_step(scatter_lambda)
+            null_var = training_step(scatter_i)
             vis = 1
-        endif else null_var = training_step(scatter_lambda)
-        
-        theta_arr[*,pixnum] = theta_lambda
+        endif else null_var = training_step(scatter_i)
 
+        if scatter_i eq 0 then begin
+
+            lambda_mask[pixnum] = 3B
+            scatter_vec[pixnum] = !values.d_nan
+            theta_arr[*,pixnum] = replicate(0d0, nparam)
+
+            print, pixnum, format='("WARNING: Scatter is 0 at pixel ",I)'
+            print, ''
+        ;     y_min = min(dflux-e_dflux)
+;             y_max = max(dflux+e_dflux)
+;             plot, vsini_train, dflux, ps=8, tit="SCATTER = 0!!! | Pixel: "+strtrim(pixnum,2), yr=[y_min, y_max]
+;             oploterror, vsini_train, dflux, e_dflux, ps=8, co=!red
+
+;             dxstop
+;             dummy=0
+
+        endif else if total(finite(theta_lambda)) ne nparam then begin
+
+            lambda_mask[pixnum] = 4B
+            scatter_vec[pixnum] = !values.d_nan
+            theta_arr[*,pixnum] = replicate(0d0, nparam)
+
+            print, pixnum, format='("WARNING: parameters undefined at pixel ",I)'
+            print, ''
+            wait, 2
+
+        endif else begin
+            ; y_min = min(dflux-e_dflux)
+;             y_max = max(dflux+e_dflux)
+;             plot, vsini_train, dflux, ps=8, tit="scatter = "+strtrim(long(scatter_i),2)+" | Pixel: "+strtrim(pixnum,2), yr=[y_min, y_max]
+;             oploterror, vsini_train, dflux, e_dflux, ps=8
+
+;             dxstop
+;             dummy=0
+        ; Mark pixel as good
+            lambda_mask[pixnum] = 0B
+
+            scatter_vec[pixnum] = scatter_i
+            theta_arr[*,pixnum] = theta_lambda
+        endelse
     endelse
 
     if ~keyword_set(visualize) then vis = 0
-
-    if pixnum eq 300 or pixnum eq 350 then begin
+    
+    ; if pixnum eq 300 or pixnum eq 350 then begin
         
-        help, theta_arr
-        help, scatter_vec
-        help, lambda_mask
+;         help, theta_arr
+;         help, scatter_vec
+;         help, lambda_mask
         
         ;vis = 1
 
-        ;stop
-    endif
+;         ;stop
+;     endif
 
 endfor
 
-print, max(scatter_vec, maxidx, /nan), format='("Maximum scatter is: ",F)'
+print, max(scatter_vec, maxidx, /nan), format='("Maximum scatter is: ",F0)'
 
 ; Set bad pixels to twice maximum scatter
 
 bad_idx = where(lambda_mask ne 0, nbad)
 
-if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 2d0
+if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 100d0
 
 outstr = {lambda_mask:lambda_mask, scatter_vec:scatter_vec, theta_arr:theta_arr}
 
@@ -743,8 +772,8 @@ for snum = 0, ncross-1 do begin
 
 
     ftol_test = 1d-5
-    test_guess_all = [mean(teff_train), mean(vsini_train), mean(feh_train), mean(logg_train)]
-    test_scale_all = [1000d0, 10d0, 1d0, 2d0]
+    test_guess_all = [mean(vsini_train), mean(teff_train), mean(feh_train), mean(logg_train)]
+    test_scale_all = [10d0, 1000d0, 1d0, 2d0]
 
     test_guess = test_guess_all[0:nlabels_set-1]
     test_scale = test_scale_all[0:nlabels_set-1]
@@ -763,10 +792,24 @@ for snum = 0, ncross-1 do begin
     ; Store results
     if n_elements(test_results) eq 1 then begin
 
-        print, "AMOEBA failed in the test step. Results are bad for spec number "+strtrim(snum,2)
-        test_label_results[*,snum] = replicate(!values.d_nan, nlabels_set)
-        test_label_errors[*,snum] = replicate(!values.d_nan, nlabels_set)
-        test_status_vec[snum] = 1
+        if (nlabels_set ne 1) or (test_results[0] eq -1) then begin
+
+            print, "AMOEBA failed in the test step. Results are bad for spec number "+strtrim(snum,2)
+            test_label_results[*,snum] = replicate(!values.d_nan, nlabels_set)
+            test_label_errors[*,snum] = replicate(!values.d_nan, nlabels_set)
+            test_status_vec[snum] = 1
+        endif else begin
+            ; success
+            test_label_results[*,snum] = test_results
+
+            output_variances = diag_matrix(covar_matrix)
+            label_variances = output_variances[1:nlabels_set]
+        
+            test_label_errors[*,snum] = sqrt(label_variances)
+            test_status_vec[snum] = 0
+        endelse
+
+
 
     endif else begin
 
@@ -783,16 +826,16 @@ endfor
 
 
 ;Teff
+if nlabels_set ge 2 then begin
 teff_cross = teff_ol[cross_idx]
-test_teff = reform(test_label_results[0,*]) + mean(teff_train)
-test_e_teff = reform(test_label_errors[0,*])
-
+test_teff = reform(test_label_results[1,*]) + mean(teff_train)
+test_e_teff = reform(test_label_errors[1,*])
+endif
 
 ;Vsini
 vsini_cross = vsini_ol[cross_idx]
-test_vsini = reform(test_label_results[1,*]) + mean(vsini_train)
-test_e_vsini = reform(test_label_errors[1,*])
-
+test_vsini = reform(test_label_results[0,*]) + mean(vsini_train)
+test_e_vsini = reform(test_label_errors[0,*])
 
 nd_true_idx = where(vsini_cross le 5, nndtrue)
 nd_fit_true_idx = where(test_vsini[nd_true_idx] le 5, nndfittrue, comp=nd_fit_false_idx, ncomp=nndfitfalse)
@@ -821,6 +864,8 @@ plotdir = '/home/stgilhool/Vsini_ML/cannon_test/plots_cannon_test/'
 plotfile = plotdir + 'cannon_test_'+test_number+'.eps'
 ;loadct, 34
 psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
+setcolors, /system_var, /color, /silent
+!p.color = !black
 
 !p.multi = [0,nlabels_set, nlabels_set]
 
@@ -836,7 +881,7 @@ for label_num = 0, nlabels_set-1 do begin
     endcase
 
     ;; Vsini
-    sg_scatter_plot, vsini_cross, test_vsini-vsini_cross, test_e_vsini, xtit="Vsini (CKS)", ytit="Vsini (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+    sg_scatter_plot, vsini_cross, test_vsini-vsini_cross, test_e_vsini, xtit="Vsini (CKS)", ytit="Vsini (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec, top=255-12)
     
     oplot, [-100,100], replicate(0d0,2), linest=2, /thick
     
@@ -847,21 +892,21 @@ for label_num = 0, nlabels_set-1 do begin
     
     if nlabels_set ge 2 then begin
                                 ;; Teff
-        sg_scatter_plot, teff_cross, test_teff-teff_cross, test_e_teff, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        sg_scatter_plot, teff_cross, test_teff-teff_cross, test_e_teff, xtit="Teff (CKS)", ytit="Teff (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec, top=255-12)
         
         oplot, [3000,9000], replicate(0d0,2), linest=2, /thick
     endif
     
     if nlabels_set ge 3 then begin
                                 ;; Feh
-        sg_scatter_plot, feh_cross, test_feh-feh_cross, test_e_feh, xtit="[Fe/H] (CKS)", ytit="[Fe/H] (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        sg_scatter_plot, feh_cross, test_feh-feh_cross, test_e_feh, xtit="[Fe/H] (CKS)", ytit="[Fe/H] (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec, top=255-12)
         
         oplot, [-3,3], replicate(0d0,2), linest=2, /thick
     endif
     
     if nlabels_set ge 4 then begin
                                 ;; Logg
-        sg_scatter_plot, logg_cross, test_logg-logg_cross, test_e_logg, xtit="Logg (CKS)", ytit="Logg (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec)
+        sg_scatter_plot, logg_cross, test_logg-logg_cross, test_e_logg, xtit="Logg (CKS)", ytit="Logg (Cannon Derivative)", charsize=1.5, colors=bytscl(mag_vec, top=255-12)
         
         oplot, [2,7], replicate(0d0,2), linest=2, /thick
     endif
@@ -871,7 +916,8 @@ endfor
 xyouts, 0.5, 0.95, "Vsini Non-detection Contamination = "+strtrim(sigfig(contamination,3),2),/alignment, /normal
 
 psclose
-
+setcolors, /system_var, /color, /silent
+!p.background=!black
 ; Write to the log file that the plot is made
 openw, lun, log_file, /get_lun, /append
 
@@ -889,7 +935,7 @@ truncate_lun, lun
 printf, lun, '1'
 free_lun, lun
 
-;stop
+stop
 
 
 end
