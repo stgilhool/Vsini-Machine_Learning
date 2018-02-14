@@ -244,7 +244,7 @@ vsini_ol_cks = overlaps_data.vsini_cks
 ; Taking just the CKS labels for this test
 
 ;sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
-sel_idx_ol = where(vsini_ol_cks le 50 and vsini_ol_cks ge 1, $
+sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
                    nsel_ol)
 
 odata = overlaps_data[sel_idx_ol]
@@ -276,7 +276,7 @@ logg_ol = odata.logg_cks
 
 ; Smooth that shit, WITH ERRORS!
 smooth_err = []
-max_flux_error = 10d0
+max_flux_error = 1d0
 error_temp = (error_ol < max_flux_error)
 mskidx = where(mask_ol ne 0)
 error_temp[mskidx] = max_flux_error
@@ -421,10 +421,10 @@ for pixnum = 0L, npix-1 do begin
     dflux = reform(slope_data[pixnum,*])
     e_dflux = reform(err_data[pixnum,*])
     
-    ftol = 1d-8
+    ftol = 1d-5
 
-    ;guess = [mean(e_dflux^2, /nan)]  
-    guess = [1d5]  
+    guess = [mean(e_dflux^2, /nan)]  
+    ;guess = [1d5]  
     scale = guess
 
     if vis then begin
@@ -473,23 +473,24 @@ for pixnum = 0L, npix-1 do begin
             vis = 1
         endif else null_var = training_step(scatter_i)
 
-        if scatter_i eq 0 then begin
+        ; if scatter_i eq 0 then begin
 
-            lambda_mask[pixnum] = 3B
-            scatter_vec[pixnum] = !values.d_nan
-            theta_arr[*,pixnum] = replicate(0d0, nparam)
+;             lambda_mask[pixnum] = 3B
+;             scatter_vec[pixnum] = !values.d_nan
+;             theta_arr[*,pixnum] = replicate(0d0, nparam)
 
-            print, pixnum, format='("WARNING: Scatter is 0 at pixel ",I)'
-            print, ''
-        ;     y_min = min(dflux-e_dflux)
-;             y_max = max(dflux+e_dflux)
-;             plot, vsini_train, dflux, ps=8, tit="SCATTER = 0!!! | Pixel: "+strtrim(pixnum,2), yr=[y_min, y_max]
-;             oploterror, vsini_train, dflux, e_dflux, ps=8, co=!red
+;             print, pixnum, format='("WARNING: Scatter is 0 at pixel ",I)'
+;             print, ''
+;         ;     y_min = min(dflux-e_dflux)
+; ;             y_max = max(dflux+e_dflux)
+; ;             plot, vsini_train, dflux, ps=8, tit="SCATTER = 0!!! | Pixel: "+strtrim(pixnum,2), yr=[y_min, y_max]
+; ;             oploterror, vsini_train, dflux, e_dflux, ps=8, co=!red
 
-;             dxstop
-;             dummy=0
+; ;             dxstop
+; ;             dummy=0
 
-        endif else if total(finite(theta_lambda)) ne nparam then begin
+;         endif else 
+        if total(finite(theta_lambda)) ne nparam then begin
 
             lambda_mask[pixnum] = 4B
             scatter_vec[pixnum] = !values.d_nan
@@ -536,7 +537,9 @@ print, max(scatter_vec, maxidx, /nan), format='("Maximum scatter is: ",F0)'
 
 bad_idx = where(lambda_mask ne 0, nbad)
 
-if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 100d0
+;if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) *
+;100d0
+if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 2d0
 
 outstr = {lambda_mask:lambda_mask, scatter_vec:scatter_vec, theta_arr:theta_arr}
 
