@@ -98,7 +98,7 @@ chi2_per_dof = chi2/dof
 chi2_diff = abs(chi2_per_dof - 1d0)
 
 ; penalize chi2 if bad regression
-if rstatus ne 0 then chi2_diff = chi2_diff * 10.
+if rstatus ne 0 then chi2_diff = chi2_diff * 1.5
 
 if vis eq 1 then begin
 
@@ -132,7 +132,7 @@ pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=description
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-nlabels_set = 3
+nlabels_set = 1
 
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
