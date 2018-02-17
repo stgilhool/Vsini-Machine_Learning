@@ -132,7 +132,7 @@ pro cannon_test, VISUALIZE=visualize, SKIP_OPT=skip_opt, DESCRIPTION=description
 
 common training, label_matrix, dflux, e_dflux, theta_lambda, vis
 
-nlabels_set = 1
+nlabels_set = 3
 
 vis = keyword_set(visualize)
 skip_opt = keyword_set(skip_opt)
@@ -298,7 +298,7 @@ print, nspec_total, format='("Number of training spectra = ", I0)'
 
 ; Partition into sets. K-fold or leave one out, or two fold for now?
 ; Just two-fold for now
-param_arr = [[vsini_ol], [teff_ol]]
+param_arr = [[vsini_ol], [teff_ol]];, [feh_ol]]
 
 nsets = 2L
 
@@ -541,7 +541,7 @@ bad_idx = where(lambda_mask ne 0, nbad)
 ;100d0
 if nbad gt 0 then scatter_vec[bad_idx] = max(scatter_vec, /nan) * 2d0
 
-outstr = {lambda_mask:lambda_mask, scatter_vec:scatter_vec, theta_arr:theta_arr}
+outstr = {lambda_mask:lambda_mask, scatter_vec:scatter_vec, theta_arr:theta_arr, train_idx:train_idx, cross_idx:cross_idx}
 
 print, "Finished"
 
