@@ -130,7 +130,13 @@ while terminate eq 0 do begin
             ; Fill up the rest of the set randomly
             while n_in_set lt npts_vec[set_i] do begin
                 ; generate random index
-                random_idx = randomu(seed, 1) * (ntotal-1)
+                defsysv, '!RNG', exists=rng_check
+                if rng_check eq 0 then begin
+                    defsysv, '!RNG', obj_new('RandomNumberGenerator')
+                    print, "Defining new system variable"
+                endif 
+                rnd_num = !rng -> GetRandomNumbers(1)
+                random_idx = rnd_num * (ntotal-1)
                 random_idx = round(random_idx[0])
                 ; check if it's valid
                 if total(finite(param_setting_arr[random_idx,*])) eq nparam then begin
