@@ -88,4 +88,37 @@ printcol, sets.set0, sets.set1, sets.set2
 
 stop
 
+; Test 5
+data = [[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]];, $
+        ;[1,1,1,5,5,5,2,2,2,21,20, 4,25, 1,19]]
+
+ntraining = [8, 7]
+
+for trial = 0, 25 do begin
+
+    sets = ml_partition_data(data, ntraining, /span)
+    
+    print, sets.(0), sets.(1), format='(8(I3), A, 7(I3))';'(15(I3,:))'
+
+endfor
+
+stop
+
+; Test 6
+data = [[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]];, $
+        ;[1,1,1,5,5,5,2,2,2,21,20, 4,25, 1,19]]
+
+ntraining = [8, 7]
+
+for trial = 0, 25 do begin
+
+    sets = ml_partition_data(data, ntraining)
+    
+    print, sets.(0), " | ", sets.(1), format='(8(I3), A, 7(I3))'
+
+endfor
+
+stop
+
+
 end
