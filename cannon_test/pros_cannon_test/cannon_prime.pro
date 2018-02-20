@@ -189,7 +189,7 @@ end
 ;;;;;;;;;;;;;;;;;;;;
 
 
-pro cannon_prime VISUALIZE=visualize
+pro cannon_prime, VISUALIZE=visualize
 
 ;;;INITIALIZE
 ;; Get Settings from input structure or input file
@@ -215,9 +215,9 @@ pro cannon_prime VISUALIZE=visualize
 common training, label_matrix, flux, e_flux, theta_lambda, vis
 
 ; Hardcode the settings
-label_names    = ['Teff', '[Fe/H]', 'logg', 'Vsini']
-shortnames     = [   't',      'f',    'g',     'v']
-label_settings = [     1,        1,      1,       0]
+label_names    = ['Vsini', 'Teff', '[Fe/H]', 'logg']
+shortnames     = [   'v',     't',      'f',    'g']
+label_settings = [     1,        1,      0,       0]
 
 model_names    = ['linear', 'quadratic']
 model_settings = [       1,           0]
@@ -230,9 +230,9 @@ nlabels_set = total(label_settings)
 vis = keyword_set(visualize)
 
 ; Initialize some stuff, and ask user for description
-outpath = '/home/stgilhool/Vsini_ML/cannon_rot_test/data_cannon_rot_test/'
+outpath = '/home/stgilhool/Vsini_ML/cannon_test/data_cannon_test/'
 
-log_file = outpath+"rot_test_log.txt"
+log_file = outpath+"test_log.txt"
 
 readcol, log_file, test_num_col, description_col, structure_flag, plot_flag, $
   format='I,A,I,I', delimiter="|", $
@@ -335,7 +335,9 @@ vsini_ol_cks = overlaps_data.vsini_cks
 
 ; Taking just the CKS labels for this test
 
-sel_idx_ol = where(vsini_ol_cks le 2, $
+;sel_idx_ol = where(vsini_ol_cks le 2, $
+;                   nsel_ol)
+sel_idx_ol = where(vsini_ol_cks le 25 and vsini_ol_cks ge 1, $
                    nsel_ol)
 
 odata = overlaps_data[sel_idx_ol]
@@ -368,12 +370,18 @@ logg_ol = odata.logg_cks
 
 ; How about we try the CANNON without any fake spectra?
 
-
-
+; Smooth that shit, WITH ERRORS!
+smooth_err = []
+max_flux_error = 1d0
+error_temp = (error_ol < max_flux_error)
+mskidx = where(mask_ol ne 0)
+error_temp[mskidx] = max_flux_error
+spectra_ol[mskidx] = (spectra_ol[mskidx] < 1d0)
+smooth_spec_ol = savgol_custom(logwl_grid, spectra_ol, error_temp, width=5, degree=4, $
+                               savgol_error=smooth_err)
 
 nspec_total = n_elements(odata) 
 npix = n_elements(spectra_ol[*,0]) 
-
 ; get rid of unnecessary stuff
 overlaps_data = 0
 ad_full = 0
@@ -381,6 +389,9 @@ ad_full = 0
 ;;; Data readin finished
 print, "Data readin finished"
 print, nspec_total, format='("Number of training spectra = ", I0)'
+;stop
+;;;
+
 
 ;;; LEAVE-ONE-OUT
 ncross = 1L
@@ -404,13 +415,100 @@ spec_idx_full = lindgen(nspec_total)
 
 ; FIXME : stuff copied here that I can't skip in the debug step
     ; Using all pixel masks for now
-    mask_bits = lindgen(15)
-    mask_dec = long(total(2L^mask_bits))
-    label_set_idx = where(label_settings eq 1)
+mask_bits = lindgen(15)
+mask_dec = long(total(2L^mask_bits))
+label_set_idx = where(label_settings eq 1)
 
 ;goto, debug
 
+;;; Center and standardize label data
+vsini_mean = mean(vsini_ol)
+vsini_sig = stddev(vsini_ol)
+vsini_all = (vsini_ol-vsini_mean)/(2d0*vsini_sig)
+
+teff_mean = mean(teff_ol)
+teff_sig = stddev(teff_ol)
+teff_all = (teff_ol-teff_mean)/(2d0*teff_sig)
+
+feh_mean = mean(feh_ol)
+feh_sig = stddev(feh_ol)
+feh_all = (feh_ol-feh_mean)/(2d0*feh_sig)
+
+logg_mean = mean(logg_ol)
+logg_sig = stddev(logg_ol)
+logg_all = (logg_ol-logg_mean)/(2d0*logg_sig)
+
+max_loop_iter = nspec_total-1
+
+ if skip_opt then begin
+    
+     ; Make full design matrix if skipping training setp
+     constant = replicate(1d0, nspec_total)
+    
+     ; Contruct full design matrix
+    
+     full_matrix_transpose = [[constant],[vsini_all], [teff_all],$
+                              [feh_all],[logg_all]]
+    
+     label_set_idx = where(label_settings eq 1)
+    
+     linear_matrix_transpose = full_matrix_transpose[*,[0,label_set_idx+1]]
+    
+    
+     ; Add quadratic terms, if necessary
+     if model_settings[1] eq 1 then begin
+         ; Initialize some stuff for making the quadratic terms
+         quad_matrix_transpose = []
+        
+         ; Loop through to make quadratic terms
+         for label_idx = 1, nlabels_set do begin
+            
+             label_i = full_matrix_transpose[*,label_idx]
+            
+             label_others = full_matrix_transpose[*,label_idx:nlabels_set]
+            
+             quad_term = rebin(label_i, size(label_others, /dim)) * label_others
+            
+             quad_matrix_transpose = [[quad_matrix_transpose],[quad_term]]
+            
+         endfor
+        
+         design_matrix_transpose = [[linear_matrix_transpose], [quad_matrix_transpose]]
+        
+     endif else if model_settings[0] eq 1 then begin
+        
+         ; linear case
+         design_matrix_transpose = linear_matrix_transpose
+        
+     endif else message, "Model incorrectly specified"
+    
+     design_matrix = transpose(design_matrix_transpose)
+    
+     ; no constant column for input to regress function
+     label_matrix = design_matrix[1:*,*]
+    
+     nparam = n_elements(design_matrix[*,0]) 
+     nlabel_columns = n_elements(label_matrix[*,0]) 
+    
+    
+     ; Data
+ ;    flux_data = spectra_ol[*,train_idx]
+     flux_data = smooth_spec_ol
+     ;err_data = error_ol[*,train_idx]
+     err_data = smooth_err
+     mask_data = mask_ol
+    
+     ; Using all pixel masks for now
+     mask_bits = lindgen(15)
+     mask_dec = long(total(2L^mask_bits))
+    
+     goto, skip_training
+
+ endif    
+    
 for iter = 0, nspec_total-1 do begin
+
+;for iter = 61, max_loop_iter do begin
 
     ; Shift the index matrix by iter entries
     spec_idx_shift = shift(spec_idx_full, iter)
@@ -421,22 +519,22 @@ for iter = 0, nspec_total-1 do begin
 
     
     ; Make design matrix
-    teff_train = teff_ol[train_idx]
-    vsini_train = vsini_ol[train_idx]
-    feh_train = feh_ol[train_idx]
-    logg_train = logg_ol[train_idx]
+    teff_train = teff_all[train_idx]
+    vsini_train = vsini_all[train_idx]
+    feh_train = feh_all[train_idx]
+    logg_train = logg_all[train_idx]
     
-    teff_label = teff_train - mean(teff_train)
-    vsini_label = vsini_train - mean(vsini_train)
-    feh_label = feh_train - mean(feh_train)
-    logg_label = logg_train - mean(logg_train)
+    teff_label = teff_train 
+    vsini_label = vsini_train 
+    feh_label = feh_train 
+    logg_label = logg_train 
     
     constant = replicate(1d0, ntrain)
     
     ; Contruct full design matrix
     
-    full_matrix_transpose = [[constant],[teff_label],$
-                             [feh_label],[logg_label],[vsini_label]]
+    full_matrix_transpose = [[constant],[vsini_label], [teff_label],$
+                             [feh_label],[logg_label]]
     
     label_set_idx = where(label_settings eq 1)
     
@@ -480,8 +578,10 @@ for iter = 0, nspec_total-1 do begin
     
     
     ; Data
-    flux_data = spectra_ol[*,train_idx]
-    err_data = error_ol[*,train_idx]
+;    flux_data = spectra_ol[*,train_idx]
+    flux_data = smooth_spec_ol[*,train_idx]
+    ;err_data = error_ol[*,train_idx]
+    err_data = smooth_err[*,train_idx]
     mask_data = mask_ol[*,train_idx]
     
     ; Using all pixel masks for now
@@ -489,7 +589,7 @@ for iter = 0, nspec_total-1 do begin
     mask_dec = long(total(2L^mask_bits))
     
     
-    if skip_opt then goto, skip_training
+    ;if skip_opt then goto, skip_training
     
     ;;; Begin loop through pixels
     ; Initialize
@@ -535,8 +635,7 @@ for iter = 0, nspec_total-1 do begin
         e_flux = reform(err_data[pixnum,*])
         
         ; Set flagged pixel error high
-        e_flux[col_mask_idx] = 1d8
-        
+        ;e_flux[col_mask_idx] = 1d8
         ftol = 1d-5
         
         guess = [median(e_flux^2)]  
@@ -564,18 +663,15 @@ for iter = 0, nspec_total-1 do begin
             ; Set pars to 1,0,0 (1*1 + 0*teff + 0*vsini = 1 (continuum))
             theta_arr[*,pixnum] = replicate(0d0, nparam)
             
-            print, pixnum, format='("WARNING: AMOEBA failed at pixel ",I)'
-            print, ''
+            ;print, pixnum, format='("WARNING: AMOEBA failed at pixel ",I)'
+            ;print, ''
             
             
         endif else begin
             
-            ; Mark pixel as good
-            lambda_mask[pixnum] = 0B
-            
             ; Store optimized scatter value
             scatter_i = abs(scatter_lambda[0])
-            scatter_vec[pixnum] = scatter_i
+            
             
             ; Get theta_lambda by calling the function once more
             if vis then begin
@@ -584,9 +680,36 @@ for iter = 0, nspec_total-1 do begin
                 vis = 1
             endif else null_var = training_step(scatter_lambda)
             
-            theta_arr[*,pixnum] = theta_lambda
-            
+            if scatter_i eq 0 then begin
+                
+                lambda_mask[pixnum] = 3B
+                scatter_vec[pixnum] = !values.d_nan
+                theta_arr[*,pixnum] = replicate(0d0, nparam)
+                
+              ;  print, pixnum, format='("WARNING: Scatter is 0 at pixel ",I)'
+               ; print, ''
+                
+            endif else if total(finite(theta_lambda)) ne nparam then begin
+
+                lambda_mask[pixnum] = 4B
+                scatter_vec[pixnum] = !values.d_nan
+                theta_arr[*,pixnum] = replicate(0d0, nparam)
+                
+                ;print, pixnum, format='("WARNING: parameters undefined at pixel ",I)'
+                ;print, ''
+                ;wait, 0.5
+                
+            endif else begin
+
+                ; Mark pixel as good
+                lambda_mask[pixnum] = 0B
+                
+                scatter_vec[pixnum] = scatter_i
+                theta_arr[*,pixnum] = theta_lambda
+                
+            endelse
         endelse
+        
         
         if ~keyword_set(visualize) then vis = 0
         
@@ -617,8 +740,15 @@ for iter = 0, nspec_total-1 do begin
               scatter_vec:scatter_vec, $
               theta_arr:theta_arr}
     
-    if iter eq 0 then outstr_loo = replicate(outstr, nspec_total) $
+     ;if iter eq 0 then outstr_loo = replicate(outstr, nspec_total) $
+     ;else outstr_loo[iter] = outstr
+    if iter eq 0 then outstr_loo = replicate(outstr, max_loop_iter+1) $
     else outstr_loo[iter] = outstr
+    ; if iter eq 61 then begin
+;         outstr_loo_in = mrdfits('/home/stgilhool/Vsini_ML/cannon_test/data_cannon_test/training_param_str_66.fits',1)
+;         outstr_loo = replicate(outstr, max_loop_iter+1)
+;         outstr_loo[0] = outstr_loo_in
+;     endif else outstr_loo[iter] = outstr
 
     print, "Finished for iteration number: "+ $
       strtrim(iter+1,2)+"/"+strtrim(nspec_total,2)
@@ -637,7 +767,8 @@ for iter = 0, nspec_total-1 do begin
     endif else mwrfits, outstr, outfile
     
     ; Write to log file, and overwrite results with full results, if finished
-    if iter eq nspec_total-1 then begin
+    ;if iter eq nspec_total-1 then begin
+    if iter eq max_loop_iter then begin
 
         ; Overwrite with array of structures
         mwrfits, outstr_loo, outfile, /create
@@ -654,6 +785,8 @@ for iter = 0, nspec_total-1 do begin
 endfor
 
 ;debug:
+skip_training:
+
 outstr_loo = mrdfits(outfile, 1)
 
 
@@ -662,28 +795,45 @@ theta_arr_loo = outstr_loo.theta_arr
 lambda_mask_loo = outstr_loo.lambda_mask
 scatter_vec_loo = outstr_loo.scatter_vec
 
-help, theta_arr_loo
-help, lambda_mask_loo
-help, scatter_vec_loo
+; help, theta_arr_loo
+; help, lambda_mask_loo
+; help, scatter_vec_loo
 
 
 ; Nan bad ones
-for pixnum = 0, npix-1 do begin
+ for pixnum = 0, npix-1 do begin
 
-    mask_spec = where(reform(lambda_mask_loo[pixnum,*]) ne 0, nmask, comp=gspec)
+     mask_spec = where(reform(lambda_mask_loo[pixnum,*]) ne 0, nmask, comp=gspec)
 
-    if nmask gt 0 then begin
+     if nmask gt max_loop_iter/2 then begin
 
-        lambda_mask_loo[pixnum,*] = 1B
-        scatter_vec_loo[pixnum,*] = !values.d_nan
-        theta_arr_loo[*,pixnum,*] = !values.d_nan
+         ; lambda_mask_loo[pixnum,mask_spec] = 5B
+;          scatter_vec_loo[pixnum,mask_spec] = !values.d_nan
+;          theta_arr_loo[*,pixnum,mask_spec] = !values.d_nan
 
-    endif
+          lambda_mask_loo[pixnum,*] = 5B
+          scatter_vec_loo[pixnum,*] = !values.d_nan
+          theta_arr_loo[*,pixnum,*] = !values.d_nan
 
-endfor
+     endif
+
+ endfor
 
 theta_arr_median = median(theta_arr_loo, dim=3)
 scatter_vec_median = median(scatter_vec_loo, dim=2)
+
+;;; ABORTED ATTEMPT TO DO WEIGHTED AVERAGE
+; weights = 1d0/scatter_vec_loo
+; weights_tmp = reform(weights, [1, size(weights,/dim)])
+; weights_arr = rebin(weights_tmp, size(theta_arr, /dim)]
+
+; theta_arr_weighted = weights_arr * theta_arr_weighted
+
+; weights_tot_arr = total(weights_arr, 3, /double)
+; theta_arr_wtot = total(theta_arr_weighted, 3, /double)
+
+; theta_arr_median = theta_arr_wtot/weights_tot_arr
+
 max_scatter = max(scatter_vec_median, /nan)
 
 lambda_mask_idx = where((~finite(scatter_vec_median)) or (~finite(theta_arr_median[0,*])), nmask, comp=good_idx)
@@ -714,7 +864,7 @@ mwrfits, med_outstr, median_outfile, /create
 
 
 
-skip_training:
+;skip_training:
 
 ;;; Now, the test step
 ; Using the theta and scatter, we optimize the labels for each
@@ -730,8 +880,9 @@ skip_training:
 ; data_cross = spectra_ol[*,cross_idx]
 ; err_data_cross = error_ol[*,cross_idx]
 ; mask_data_cross = mask_ol[*,cross_idx]
-data_cross = spectra_ol
-err_data_cross = error_ol
+;data_cross = spectra_ol
+data_cross = smooth_spec_ol
+err_data_cross = smooth_err
 mask_data_cross = mask_ol
 
 
@@ -740,10 +891,10 @@ mask_data_cross = mask_ol
 ;FIXME (this is true, but inflexible)
 ncross = nspec_total
 cross_idx = lindgen(nspec_total)
-teff_train = teff_ol
-feh_train = feh_ol
-logg_train = logg_ol
-vsini_train = vsini_ol
+teff_train = teff_all
+feh_train = feh_all
+logg_train = logg_all
+vsini_train = vsini_all
 
 ;;; Begin loop through spectra
 ; Initialize
@@ -774,9 +925,9 @@ for snum = 0, ncross-1 do begin
     
     ; Jack up error for masked pixels
     test_err_masked = test_err
-    if nmask_test gt 0 then begin
-        test_err_masked[test_mask_idx] = 1d8
-    endif
+    ; if nmask_test gt 0 then begin
+;         test_err_masked[test_mask_idx] = 1d8
+;     endif
 
     ; Combine errors
     test_sigma = sqrt(test_err_masked^2 + scatter_vec)
@@ -807,19 +958,33 @@ for snum = 0, ncross-1 do begin
 
 
     ftol_test = 1d-5
-    test_guess_all = [mean(teff_train), mean(feh_train), mean(logg_train), $
-                      mean(vsini_train)]
-    test_scale_all = [1000d0, 1d0, 2d0, 10d0]
+    ;test_guess_all = [mean(vsini_train), mean(teff_train), mean(feh_train), $
+                      ;mean(logg_train)]
+
+    test_guess_all = replicate(0d0, n_elements(label_set_idx))
+    ;test_scale_all = [1000d0, 1d0, 2d0, 10d0]
+    test_scale_all = replicate(1d0, n_elements(label_set_idx))
 
     test_guess = test_guess_all[label_set_idx]
     test_scale = test_scale_all[label_set_idx]
     nmax_test = 5000
 
+    ; Trying no AMOEBA
+    test_constant_vec = reform(theta_arr[0,*])
 
-    test_results = amoeba3(ftol_test, function_name='test_step', $
-                             p0=test_guess, scale=test_scale, $
-                             function_value=fval_test, $
-                             nmax=nmax_test, ncalls=ncalls_test)
+    test_matrix_rgs = theta_arr[1:*,*]
+
+    ; Remove the constant offset from test_data
+    test_yvals = test_data - test_constant_vec
+    
+    test_results = regress(test_matrix_rgs, test_yvals, measure_errors=test_sigma, $
+                             sigma=label_errors, status=test_status)
+
+    test_results = reform(test_results)
+;     test_results = amoeba3(ftol_test, function_name='test_step', $
+;                              p0=test_guess, scale=test_scale, $
+;                              function_value=fval_test, $
+;                              nmax=nmax_test, ncalls=ncalls_test)
     
 
 
@@ -848,50 +1013,65 @@ endfor
 
 
 ; This is pretty dumb
-;Teff
+;Vsini
 if label_settings[0] eq 1 then begin
-    teff_cross = teff_ol[cross_idx]
-    test_teff = reform(test_label_results[0,*]) + mean(teff_train)
-    test_e_teff = reform(test_label_errors[0,*])
-    res_teff = test_teff-teff_cross
+
+    vsini_label_idx = where(label_set_idx eq 0, noops)
+    if noops eq 0 then message, "Problem with vsini idx"
+
+    test_vsini = (reform(test_label_results[vsini_label_idx,*])*2d0*vsini_sig) + vsini_mean
+    test_e_vsini = (reform(test_label_errors[vsini_label_idx,*])*2d0*vsini_sig)
+    res_vsini = test_vsini - vsini_ol
+    vsini_true = 1
+endif else vsini_true = 0
+
+; Teff
+if label_settings[1] eq 1 then begin
+
+    teff_label_idx = where(label_set_idx eq 1, noops)
+    if noops eq 0 then message, "Problem with teff idx"
+
+    test_teff = (reform(test_label_results[teff_label_idx,*])*2d0*teff_sig) + teff_mean
+    test_e_teff = (reform(test_label_errors[teff_label_idx,*])*2d0*teff_sig)
+    res_teff = test_teff - teff_ol
     teff_true = 1
 endif else teff_true = 0
 
-if label_settings[1] eq 1 then begin
-    ;Feh
-    feh_cross = feh_ol[cross_idx]
-    feh_label_idx = where(label_set_idx eq 1, noops)
+; Feh
+if label_settings[2] eq 1 then begin
+
+    feh_label_idx = where(label_set_idx eq 2, noops)
     if noops eq 0 then message, "Problem with feh idx"
 
-    test_feh = reform(test_label_results[feh_label_idx,*]) + mean(feh_train)
-    test_e_feh = reform(test_label_errors[feh_label_idx,*])
-    res_feh = test_feh - feh_cross
+    test_feh = (reform(test_label_results[feh_label_idx,*])*2d0*feh_sig) + feh_mean
+    test_e_feh = (reform(test_label_errors[feh_label_idx,*])*2d0*feh_sig)
+    res_feh = test_feh - feh_ol
     feh_true = 1
 endif else feh_true = 0
 
-if label_settings[2] eq 1 then begin
-    ;Logg
-    logg_cross = logg_ol[cross_idx]
-    logg_label_idx = where(label_set_idx eq 2, noops)
+; Logg
+if label_settings[3] eq 1 then begin
+
+    logg_label_idx = where(label_set_idx eq 3, noops)
     if noops eq 0 then message, "Problem with logg idx"
 
-    test_logg = reform(test_label_results[logg_label_idx,*]) + mean(logg_train)
-    test_e_logg = reform(test_label_errors[logg_label_idx,*])
-    res_logg = test_logg - logg_cross
+    test_logg = (reform(test_label_results[logg_label_idx,*])*2d0*logg_sig) + logg_mean
+    test_e_logg = (reform(test_label_errors[logg_label_idx,*])*2d0*logg_sig)
+    res_logg = test_logg - logg_ol
     logg_true = 1
 endif else logg_true = 0
 
-if label_settings[3] eq 1 then begin
-    ;Vsini
-    vsini_cross = vsini_ol[cross_idx]
-    vsini_label_idx = where(label_set_idx eq 3, noops)
-    if noops eq 0 then message, "Problem with vsini idx"
+; NON DET CONTAMINATION
+if label_settings[0] eq 1 then begin
 
-    test_vsini = reform(test_label_results[vsini_label_idx,*]) + mean(vsini_train)
-    test_e_vsini = reform(test_label_errors[vsini_label_idx,*])
-    res_vsini = test_vsini - vsini_cross
-    vsini_true = 1
-endif else vsini_true = 0
+    nd_true_idx = where(vsini_ol le 5, nndtrue)
+    nd_fit_true_idx = where(test_vsini[nd_true_idx] le 5, nndfittrue, comp=nd_fit_false_idx, ncomp=nndfitfalse)
+
+    nsuccess = double(nndfittrue)/double(nndtrue)
+
+    contamination = double(nndfitfalse)/(double(nndfittrue)+double(nndfitfalse))
+endif
+
 
 
 ; Mark failed guys in red
@@ -899,14 +1079,16 @@ failed_idx = where(test_status_vec ne 0, nfail_test)
 
 
 ;window, 1, tit="RESULTS!!!", xs=1500, ys=900
-plotdir = '/home/stgilhool/Vsini_ML/cannon_rot_test/plots_cannon_rot_test/'
-plotfile = plotdir + 'cannon_rot_test_'+test_number+'.eps'
+plotdir = '/home/stgilhool/Vsini_ML/cannon_test/plots_cannon_test/'
+plotfile = plotdir + 'cannon_test_'+test_number+'.eps'
+
+psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
+setcolors, /system_var, /color, /silent
+!p.color = !black
 
 !p.multi = [0,nlabels_set, nlabels_set]
 
-loadct, 35
 
-psopen, plotfile, /encaps, /color, xs=10, ys=8, /inches
 ;window, 0, xs = 1600, ys=900
 
 ;xyouts, 0.5, 0.95, model_type, alignment=1, charsize=3
@@ -924,25 +1106,26 @@ for lab_i = 0, nlabels_tot - 1 do begin
         case lab_i of
 
             0: begin
-                mag_vec = teff_cross
-                cbar_title = "Teff (CKS)"
-            end
-
-            1: begin
-                mag_vec = feh_cross
-                cbar_title = "[Fe/H] (CKS)"
-            end
-
-            2: begin
-                mag_vec = logg_cross
-                cbar_title = "Logg (CKS)"
-            end
-
-            3: begin
-                mag_vec = vsini_cross
+                mag_vec = vsini_ol
                 cbar_title = "Vsini (CKS)"
             end
 
+            1: begin
+                mag_vec = teff_ol
+                cbar_title = "Teff (CKS)"
+            end
+
+            2: begin
+                mag_vec = feh_ol
+                cbar_title = "[Fe/H] (CKS)"
+            end
+
+            3: begin
+                mag_vec = logg_ol
+                cbar_title = "Logg (CKS)"
+            end
+
+            
             else: message, "Error in label settings jawn"
                 
         endcase
@@ -950,7 +1133,25 @@ for lab_i = 0, nlabels_tot - 1 do begin
 
     endif else continue
 
-    ; TEFF
+    ; VSINI
+    if vsini_true then begin
+        ; vsini_plot = scatterplot(vsini_cross, res_vsini, symbol='circle', $
+;                                 sym_size=0.2, xtit="Vsini (CKS)", $
+;                                 ytit=textoidl('\delta Vsini'), $
+;                                  magnitude=mag_vec)
+        
+        ;         rline_vsini = plot(vsini_plot.xrange, [0,0],
+        ;         /overplot, /thick)
+        sg_scatter_plot, vsini_ol, res_vsini, test_e_vsini, $
+          colors=bytscl(mag_vec, top=255-12), xtit=textoidl('vsini (CKS)'), $
+          ytit=textoidl('\Delta vsini')
+        oplot, minmax(vsini_ol), replicate(0d0, 2), linest=2, /thick
+        
+    endif
+
+
+
+; TEFF
     if teff_true then begin
         ; teff_plot = scatterplot(teff_cross, res_teff, symbol='circle', $
 ;                                 sym_size=0.2, 
@@ -958,10 +1159,10 @@ for lab_i = 0, nlabels_tot - 1 do begin
 ;                                 magnitude=mag_vec)
         
 ;         rline_teff = plot(teff_plot.xrange, [0,0], /overplot, /thick)
-        sg_scatter_plot, teff_cross, res_teff, sqrt(test_e_teff^2), $
-          colors=bytscl(mag_vec), xtit=textoidl('T_{eff} (CKS)'), $
+        sg_scatter_plot, teff_ol, res_teff, sqrt(test_e_teff^2), $
+          colors=bytscl(mag_vec, top=255-12), xtit=textoidl('T_{eff} (CKS)'), $
           ytit=textoidl('\Delta T_{eff}')
-        oplot, minmax(teff_cross), replicate(0d0, 2), linest=2, /thick
+        oplot, minmax(teff_ol), replicate(0d0, 2), linest=2, /thick
 
 
     endif
@@ -974,10 +1175,10 @@ for lab_i = 0, nlabels_tot - 1 do begin
 ;                                magnitude=mag_vec)
         
 ;         rline_feh = plot(feh_plot.xrange, [0,0], /overplot, /thick)
-        sg_scatter_plot, feh_cross, res_feh, test_e_feh, $
-          colors=bytscl(mag_vec), xtit=textoidl('[Fe/H] (CKS)'), $
+        sg_scatter_plot, feh_ol, res_feh, test_e_feh, $
+          colors=bytscl(mag_vec, top=255-12), xtit=textoidl('[Fe/H] (CKS)'), $
           ytit=textoidl('\Delta [Fe/H]')
-        oplot, minmax(feh_cross), replicate(0d0, 2), linest=2, /thick
+        oplot, minmax(feh_ol), replicate(0d0, 2), linest=2, /thick
             
     endif
 
@@ -990,36 +1191,26 @@ for lab_i = 0, nlabels_tot - 1 do begin
         
         ;         rline_logg = plot(logg_plot.xrange, [0,0],
         ;         /overplot, /thick)
-        sg_scatter_plot, logg_cross, res_logg, test_e_logg, $
-          colors=bytscl(mag_vec), xtit=textoidl('logg (CKS)'), $
+        sg_scatter_plot, logg_ol, res_logg, test_e_logg, $
+          colors=bytscl(mag_vec, top=255-12), xtit=textoidl('logg (CKS)'), $
           ytit=textoidl('\Delta logg')
-        oplot, minmax(logg_cross), replicate(0d0, 2), linest=2, /thick
+        oplot, minmax(logg_ol), replicate(0d0, 2), linest=2, /thick
 
     endif
 
-    ; VSINI
-    if vsini_true then begin
-        ; vsini_plot = scatterplot(vsini_cross, res_vsini, symbol='circle', $
-;                                 sym_size=0.2, xtit="Vsini (CKS)", $
-;                                 ytit=textoidl('\delta Vsini'), $
-;                                  magnitude=mag_vec)
-        
-        ;         rline_vsini = plot(vsini_plot.xrange, [0,0],
-        ;         /overplot, /thick)
-        sg_scatter_plot, vsini_cross, res_vsini, test_e_vsini, $
-          colors=bytscl(mag_vec), xtit=textoidl('vsini (CKS)'), $
-          ytit=textoidl('\Delta vsini')
-        oplot, minmax(vsini_cross), replicate(0d0, 2), linest=2, /thick
-        
-    endif
-
-
+    
 ;    c = colorbar(orientation=1, title=cbar_title)
 
 endfor
 
+if label_settings[0] eq 1 then begin
+    xyouts, 0.5, 0.95, "Vsini Non-detection Contamination = "+strtrim(sigfig(contamination,3),2),/alignment, /normal
+endif
 
 psclose
+setcolors, /system_var, /color, /silent
+!p.background=!black
+
 
 ; Write to the log file that the plot is made
 openw, lun, log_file, /get_lun, /append
